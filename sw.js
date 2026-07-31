@@ -1,5 +1,5 @@
 /* Again — offline cache, cache-first for same-origin static assets */
-var VERSION = "again-v3";
+var VERSION = "again-v4";
 var ASSETS = ["./", "index.html", "app.js", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-512.png"];
 
 self.addEventListener("install", function (e) {

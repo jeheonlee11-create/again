@@ -1,154 +1,153 @@
-/* again — app logic. Vanilla JS, no dependencies. */
+/* again — MVP core loop: cook → log → compare → rank → recommend → cook again.
+   Vanilla JS, localStorage persistence, no dependencies. */
 (function () {
   "use strict";
 
   var $ = function (id) { return document.getElementById(id); };
-  var K_ROT = "again.rotation.v2";
-  var K_WANT = "again.want.v2";
-  var K_LOG = "again.cooklog.v2";
-  var K_LIST = "again.shoplist.v1";
-
+  var KEY = "again.v3";
   var DAY = 864e5, WEEK = 7 * DAY;
 
-  /* ================= data ================= */
+  /* ================================================================ STORE */
 
-  var BANDS = {
-    yes:   { lo: 7.0, hi: 10.0, label: "Would make again" },
-    maybe: { lo: 4.0, hi: 6.9,  label: "On the fence" },
-    no:    { lo: 0.0, hi: 3.9,  label: "Not making that twice" }
-  };
-  var TIER_ORDER = ["yes", "maybe", "no"];
-  var HOUSEHOLD = ["You", "Sam", "The kids"];
-
-  function d(name, src, occ, tier, reps, extra) {
-    var base = {
-      name: name, src: src, occ: occ, tier: tier, reps: reps,
-      cuisine: "", tags: [], hh: [], mods: "", thumb: null,
-      lastTs: Date.now() - 3 * DAY,
-      hist: []
+  function blankStore() {
+    return {
+      household: null,                 // {name, members:[names]} — null → onboarding
+      meals: [],                       // {id,name,url,thumb,timeMins,effort,tags[],createdAt,mods}
+      events: [],                      // {mealId,ts,ate[],reactions{},note,again}
+      comparisons: [],                 // {a,b,result:'a'|'b'|'same'|'skip',ts}
+      saved: [],                       // {id,title,url,from,status:'queued'|'cooked'}
+      order: { yes: [], maybe: [], no: [] },
+      analytics: [],
+      fb: { shown: {}, answers: {} }
     };
-    Object.keys(extra || {}).forEach(function (k) { base[k] = extra[k]; });
-    if (!base.hist.length) {
-      for (var i = 0; i < reps; i++) base.hist.push(base.lastTs - i * 9 * DAY);
-    }
-    return base;
   }
 
-  var SEED = [
-    d("Marcella's tomato, butter and onion sauce", "NYT Cooking", "weeknight", "yes", 11,
-      { cuisine: "Italian", tags: ["quick", "cheap"], hh: ["You", "Sam", "The kids"], lastTs: Date.now() - 2 * DAY, mods: "Half the butter. Nobody has ever noticed." }),
-    d("Cast-iron pan pizza", "Serious Eats", "project", "yes", 6,
-      { cuisine: "Italian", tags: [], hh: ["You", "Sam", "The kids"], lastTs: Date.now() - 6 * DAY }),
-    d("Gochujang buttered noodles", "NYT Cooking", "weeknight", "yes", 9,
-      { cuisine: "Korean", tags: ["quick"], hh: ["You", "Sam"], lastTs: Date.now() - 4 * DAY, mods: "Extra butter, scallions from the garden." }),
-    d("Sheet-pan chicken thighs with lemon", "Mine", "weeknight", "yes", 14,
-      { cuisine: "American", tags: ["quick", "cheap", "healthy"], hh: ["You", "Sam", "The kids"], lastTs: Date.now() - 1 * DAY }),
-    d("Roasted cauliflower with tahini", "Ottolenghi", "hosting", "yes", 4,
-      { cuisine: "Middle Eastern", tags: ["healthy"], hh: ["You", "Sam"], lastTs: Date.now() - 12 * DAY }),
-    d("Green chile mac", "TikTok", "weeknight", "yes", 3,
-      { cuisine: "Tex-Mex", tags: ["quick", "cheap"], hh: ["You", "The kids"], lastTs: Date.now() - 9 * DAY }),
-    d("Ragù bolognese", "Marcella Hazan", "project", "yes", 2,
-      { cuisine: "Italian", tags: [], hh: ["You", "Sam", "The kids"], lastTs: Date.now() - 20 * DAY }),
-    d("Shrimp scampi", "Mom", "weeknight", "yes", 5,
-      { cuisine: "Italian", tags: ["quick"], hh: ["You", "Sam"], lastTs: Date.now() - 8 * DAY }),
-    d("Miso-glazed salmon", "TikTok", "weeknight", "maybe", 3,
-      { cuisine: "Japanese", tags: ["quick", "healthy"], hh: ["You"], lastTs: Date.now() - 15 * DAY }),
-    d("Braised short ribs", "NYT Cooking", "hosting", "maybe", 1,
-      { cuisine: "French", tags: [], hh: ["You", "Sam"], lastTs: Date.now() - 30 * DAY }),
-    d("Cacio e pepe", "Improvised", "weeknight", "maybe", 4,
-      { cuisine: "Italian", tags: ["quick", "cheap"], hh: ["You"], lastTs: Date.now() - 11 * DAY, mods: "Broke twice out of four. Technique, not recipe." }),
-    d("Air-fryer salmon bites", "TikTok", "weeknight", "maybe", 1,
-      { cuisine: "American", tags: ["quick", "healthy"], hh: ["You", "The kids"], lastTs: Date.now() - 25 * DAY })
-  ];
+  var S = load();
 
-  var SEED_WANT = [
-    { name: "Marry-me chicken", src: "TikTok", occ: "weeknight", from: "Nadia" },
-    { name: "Weeknight red lentil soup", src: "NYT Cooking", occ: "weeknight", from: "Trending" },
-    { name: "Birria tacos", src: "YouTube", occ: "project", from: "Theo" },
-    { name: "Salt-crust branzino", src: "Cookbook", occ: "hosting", from: "Priya" }
-  ];
-
-  var FRIENDS = [
-    { who: "Nadia", init: "NK",
-      table: { "Gochujang buttered noodles": 9.0, "Cacio e pepe": 8.9, "Sheet-pan chicken thighs with lemon": 8.1, "Miso-glazed salmon": 6.2 },
-      feed: [
-        { dish: "Gochujang buttered noodles", src: "NYT Cooking", score: 9.0, when: "2h", occ: "weeknight", move: "Moved to #4 on her list", reps: 6 },
-        { dish: "Cacio e pepe", src: "Improvised", score: 8.9, when: "3d", occ: "weeknight", reps: 3 }
-      ] },
-    { who: "Theo", init: "TM",
-      table: { "Cast-iron pan pizza": 9.6, "Ragù bolognese": 8.8, "Green chile mac": 5.4 },
-      feed: [
-        { dish: "Cast-iron pan pizza", src: "Serious Eats", score: 9.6, when: "Yesterday", occ: "project", move: "Still #1 after 11 cooks", reps: 11 }
-      ] },
-    { who: "Priya", init: "PR",
-      table: { "Salt-crust branzino": 8.7, "Roasted cauliflower with tahini": 8.9, "Braised short ribs": 7.6 },
-      feed: [
-        { dish: "Salt-crust branzino", src: "Cookbook", score: 8.7, when: "Yesterday", occ: "hosting", move: "New at #6", reps: 1 }
-      ] }
-  ];
-
-  var GOAL = { label: "New dishes in 2026", target: 50 };
-
-  function seedCookLog() {
-    var now = Date.now(), out = [], w, i, perWeek = [3, 2, 3, 2, 2, 2];
-    for (w = 0; w < perWeek.length; w++) {
-      for (i = 0; i < perWeek[w]; i++) out.push(now - w * WEEK - (i + 1) * 1.1 * DAY);
-    }
-    for (w = 8; w < 20; w += 2) out.push(now - w * WEEK - 2 * DAY);
-    return out;
-  }
-
-  function load(key) {
+  function load() {
     try {
-      var raw = localStorage.getItem(key);
-      if (!raw) return null;
-      var v = JSON.parse(raw);
-      return Array.isArray(v) ? v : null;
+      var raw = localStorage.getItem(KEY);
+      if (raw) {
+        var v = JSON.parse(raw);
+        if (v && v.order && v.meals) return v;
+      }
+    } catch (e) {}
+    return migrateV2() || blankStore();
+  }
+
+  /* best-effort migration from the pre-pivot store */
+  function migrateV2() {
+    try {
+      var rot = JSON.parse(localStorage.getItem("again.rotation.v2") || "null");
+      if (!Array.isArray(rot) || !rot.length) return null;
+      var s = blankStore();
+      s.household = { name: "Our household", members: ["You"] };
+      rot.forEach(function (d) {
+        var id = uid();
+        s.meals.push({ id: id, name: d.name, url: "", thumb: d.thumb || null,
+          timeMins: null, effort: null, tags: d.tags || [], createdAt: Date.now(), mods: d.mods || "" });
+        var tier = d.tier === "no" ? "no" : (d.tier === "maybe" ? "maybe" : "yes");
+        s.order[tier].push(id);
+        var n = Math.max(1, d.reps || 1);
+        for (var i = 0; i < n; i++) {
+          s.events.push({ mealId: id, ts: (d.lastTs || Date.now()) - i * 9 * DAY,
+            ate: ["You"], reactions: {}, note: "", again: tier });
+        }
+      });
+      return s;
     } catch (e) { return null; }
   }
 
-  function save(key, v) {
-    try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {}
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+
+  function uid() { return "m" + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4); }
+
+  /* ================================================================ ANALYTICS
+     Thin abstraction — swap the sink later without touching call sites. */
+
+  function track(event, props) {
+    var rec = { e: event, ts: Date.now(), p: props || {} };
+    S.analytics.push(rec);
+    if (S.analytics.length > 500) S.analytics = S.analytics.slice(-400);
+    try { console.debug("[analytics]", event, props || {}); } catch (e) {}
+    save();
   }
 
-  var rotation = (load(K_ROT) || SEED.map(function (x) { return Object.assign({}, x); }))
-    .filter(function (x) { return x && typeof x.name === "string" && BANDS[x.tier]; });
-  var wantList = load(K_WANT) || SEED_WANT.map(function (x) { return Object.assign({}, x); });
-  var cookLog = load(K_LOG) || seedCookLog();
-  var shopList = load(K_LIST) || [];
-
-  function persist() { save(K_ROT, rotation); save(K_WANT, wantList); save(K_LOG, cookLog); save(K_LIST, shopList); }
-
-  /* ================= model helpers ================= */
-
-  function tierItems(t) { return rotation.filter(function (x) { return x.tier === t; }); }
-
-  function bandScore(band, i, n) {
-    var span = band.hi - band.lo;
-    var hi = band.hi - span * 0.04;
-    var lo = band.lo + span * 0.06;
-    if (n <= 1) return lo + (hi - lo) * 0.72;
-    return hi - (i / (n - 1)) * (hi - lo);
+  function countEv(name) {
+    return S.analytics.filter(function (a) { return a.e === name; }).length;
   }
 
-  function scoreOf(x) {
-    var items = tierItems(x.tier);
-    return bandScore(BANDS[x.tier], items.indexOf(x), items.length);
+  /* ================================================================ DERIVED */
+
+  function mealById(id) { return S.meals.filter(function (m) { return m.id === id; })[0] || null; }
+  function mealByName(name) {
+    var q = String(name).trim().toLowerCase();
+    return S.meals.filter(function (m) { return m.name.trim().toLowerCase() === q; })[0] || null;
+  }
+  function eventsOf(id) {
+    return S.events.filter(function (e) { return e.mealId === id; })
+      .sort(function (a, b) { return b.ts - a.ts; });
+  }
+  function repsOf(id) { return eventsOf(id).length; }
+  function lastTsOf(id) { var e = eventsOf(id)[0]; return e ? e.ts : null; }
+  function tierOf(id) {
+    if (S.order.yes.indexOf(id) >= 0) return "yes";
+    if (S.order.maybe.indexOf(id) >= 0) return "maybe";
+    if (S.order.no.indexOf(id) >= 0) return "no";
+    return null;
   }
 
-  var fmt = function (n) { return n.toFixed(1); };
+  function orderedIds() { return S.order.yes.concat(S.order.maybe, S.order.no); }
+  function rankOf(id) { return orderedIds().indexOf(id) + 1; }
 
-  function totalCooks() { return rotation.reduce(function (a, x) { return a + (x.reps || 1); }, 0); }
+  function members() { return (S.household && S.household.members) || ["You"]; }
 
-  function findDish(name) {
-    var q = String(name).toLowerCase();
-    return rotation.filter(function (x) { return x.name.toLowerCase() === q; })[0] || null;
+  function lastEvent(id) { return eventsOf(id)[0] || null; }
+
+  function everyoneOK(id) {
+    var e = lastEvent(id);
+    if (!e) return false;
+    var ms = members();
+    var allAte = ms.every(function (m) { return e.ate.indexOf(m) >= 0; });
+    var noNever = ms.every(function (m) { return e.reactions[m] !== "never"; });
+    return allAte && noNever;
+  }
+
+  function hasNever(id) {
+    var e = lastEvent(id);
+    if (!e) return false;
+    return Object.keys(e.reactions).some(function (k) { return e.reactions[k] === "never"; });
+  }
+
+  function labelOf(id) {
+    var t = tierOf(id);
+    if (t === "no") return { k: "retired", txt: "Retired" };
+    if (t === "yes" && repsOf(id) >= 4 && everyoneOK(id)) return { k: "staple", txt: "Household staple" };
+    var m = mealById(id);
+    if (t === "yes" && m && m.effort === "involved") return { k: "occasion", txt: "Special occasion" };
+    if (t === "maybe" || hasNever(id)) return { k: "mixed", txt: "Mixed response" };
+    if (t === "yes") return { k: "repeat", txt: "Worth repeating" };
+    return { k: "mixed", txt: "Unranked" };
+  }
+
+  function ago(ts) {
+    if (!ts) return "never";
+    var days = Math.round((Date.now() - ts) / DAY);
+    if (days <= 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 7) return days + " days ago";
+    if (days < 60) { var w = Math.round(days / 7); return w === 1 ? "last week" : w + " weeks ago"; }
+    var mo = Math.round(days / 30); return mo === 1 ? "last month" : mo + " months ago";
+  }
+
+  function dateShort(ts) {
+    return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
 
   function streakWeeks() {
-    if (!cookLog.length) return 0;
+    if (!S.events.length) return 0;
     var now = Date.now(), weeks = {};
-    cookLog.forEach(function (ts) { weeks[Math.floor((now - ts) / WEEK)] = true; });
+    S.events.forEach(function (e) { weeks[Math.floor((now - e.ts) / WEEK)] = true; });
     var start = weeks[0] ? 0 : (weeks[1] ? 1 : -1);
     if (start < 0) return 0;
     var n = 0, w = start;
@@ -156,66 +155,52 @@
     return n;
   }
 
-  function matchPct(friend) {
-    var diffs = [];
-    Object.keys(friend.table).forEach(function (name) {
-      var mine = findDish(name);
-      if (mine) diffs.push(Math.abs(friend.table[name] - scoreOf(mine)));
-    });
-    if (!diffs.length) return null;
-    var avg = diffs.reduce(function (a, b) { return a + b; }, 0) / diffs.length;
-    return Math.max(0, Math.min(100, Math.round(100 - avg * 10)));
-  }
-
   function esc(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
-  function ago(ts) {
-    var days = Math.round((Date.now() - ts) / DAY);
-    if (days <= 0) return "today";
-    if (days === 1) return "yesterday";
-    if (days < 7) return days + "d ago";
-    if (days < 30) return Math.round(days / 7) + "w ago";
-    return Math.round(days / 30) + "mo ago";
+  /* ================================================================ ORDER OPS */
+
+  function removeFromOrder(id) {
+    ["yes", "maybe", "no"].forEach(function (t) {
+      var i = S.order[t].indexOf(id);
+      if (i >= 0) S.order[t].splice(i, 1);
+    });
   }
 
-  function dateShort(ts) {
-    return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  function placeInBand(id, tier, pos) {
+    removeFromOrder(id);
+    if (pos == null || pos < 0 || pos > S.order[tier].length) S.order[tier].push(id);
+    else S.order[tier].splice(pos, 0, id);
   }
 
-  /* ================= shared components ================= */
+  /* ================================================================ COMPONENTS */
 
-  function tile(x, size) {
-    var initial = esc((x.name || "?").trim().charAt(0));
-    if (x.thumb) return '<span class="tile tile-' + size + '"><img src="' + x.thumb + '" alt=""></span>';
-    return '<span class="tile tile-' + size + '" aria-hidden="true">' + initial + "</span>";
+  function tile(m, size) {
+    var name = m && m.name ? m.name : "?";
+    if (m && m.thumb) return '<span class="tile tile-' + size + '"><img src="' + m.thumb + '" alt=""></span>';
+    return '<span class="tile tile-' + size + '" aria-hidden="true">' + esc(name.trim().charAt(0) || "?") + "</span>";
   }
 
-  function hhScore(x) {
-    if (!x.hh || !x.hh.length) return null;
-    return x.hh.length + "/" + HOUSEHOLD.length;
+  function labelHtml(id) {
+    var l = labelOf(id);
+    return '<span class="label label-' + l.k + '">' + l.txt + "</span>";
   }
 
-  function mealRow(x) {
-    var overall = rotation.indexOf(x) + 1;
-    var hh = hhScore(x);
-    return '<button class="mrow' + (overall <= 3 ? " top3" : "") +
-      (x.name === st.fresh ? " fresh" : "") + '" data-detail="' + esc(x.name) + '">' +
-      '<span class="rank">' + overall + "</span>" +
-      tile(x, "sm") +
-      "<span><span class=\"name\">" + esc(x.name) + "</span>" +
-      '<span class="meta2"><span>' + (x.reps || 1) + "× cooked</span>" +
-      "<span>" + ago(x.lastTs || Date.now()) + "</span>" +
-      (hh ? '<span class="hh">' + hh + " household</span>" : "") +
+  function mealRow(id, opts) {
+    var m = mealById(id);
+    if (!m) return "";
+    var r = rankOf(id), reps = repsOf(id), last = lastTsOf(id);
+    return '<button class="mrow' + (r <= 3 && tierOf(id) === "yes" ? " top3" : "") +
+      (st.fresh === id ? " fresh" : "") + '" data-detail="' + id + '">' +
+      '<span class="rank">' + r + "</span>" +
+      tile(m, "sm") +
+      "<span><span class=\"name\">" + esc(m.name) + "</span>" +
+      '<span class="meta2"><span>' + reps + "× cooked</span><span>" + ago(last) + "</span>" +
+      (m.timeMins ? "<span>" + m.timeMins + " min</span>" : "") +
       "</span></span>" +
-      '<span class="score">' + fmt(scoreOf(x)) + "</span></button>";
-  }
-
-  function emptyState(title, body, cta) {
-    return '<div class="empty"><span class="brand">' + title + "</span><p>" + body + "</p>" +
-      (cta ? '<button class="btn btn-primary btn-sm" data-tab-go="log">' + cta + "</button>" : "") + "</div>";
+      '<span class="rowlabel">' + labelHtml(id) + "</span></button>";
   }
 
   var toastTimer = null;
@@ -227,365 +212,586 @@
     toastTimer = setTimeout(function () { el.classList.remove("on"); }, 2200);
   }
 
-  /* ================= state ================= */
+  /* single comparison card. cb(result) with 'a'|'b'|'same'|'skip' */
+  function duelHtml(aMeal, bMeal, aCtx, bCtx) {
+    return '<div class="duelwrap">' +
+      '<button class="duel" data-duel="a">' + tile(aMeal, "lg") +
+        '<span class="dinfo"><span class="dlabel">' + esc(aCtx || "") + '</span>' +
+        '<span class="dname">' + esc(aMeal.name) + "</span></span></button>" +
+      '<div class="duel-or">or</div>' +
+      '<button class="duel" data-duel="b">' + tile(bMeal, "lg") +
+        '<span class="dinfo"><span class="dlabel">' + esc(bCtx || "") + '</span>' +
+        '<span class="dname">' + esc(bMeal.name) + "</span></span></button>" +
+      "</div>" +
+      '<div class="duel-alts">' +
+        '<button class="btn btn-quiet btn-sm" data-duel="same">About the same</button>' +
+        '<button class="btn btn-quiet btn-sm" data-duel="skip">Skip</button>' +
+      "</div>";
+  }
+
+  /* ================================================================ STATE */
 
   var st = {
-    tab: "home",
-    filter: "all",
+    tab: "tonight",
+    view: "all",
     fresh: null,
-    wantDraft: "",
-    homeLoaded: false,
-    log: null
+    onb: null,          // {step, name, members, mealNames[], mealIds[], duelN}
+    log: null,          // see newLog()
+    duelCb: null,       // active duel resolver
+    savedDraft: ""
   };
 
-  function newLog() {
-    return { step: "pick", draft: "", url: "", occ: "weeknight", tags: [], hh: ["You"], mods: "",
-             thumb: null, dish: null, tier: null, lo: 0, hi: 0, seen: 0, est: 1, skips: 0 };
-  }
-  st.log = newLog();
-
-  /* ================= HOME ================= */
-
-  function skeletonFeed() {
-    var one = '<div class="card fcard skel" aria-hidden="true">' +
-      '<div class="fhead"><span class="sk" style="width:28px;height:28px;border-radius:50%"></span>' +
-      '<span class="sk" style="width:120px;height:12px"></span></div>' +
-      '<div class="fbody"><span class="sk" style="width:44px;height:44px"></span>' +
-      '<span style="flex:1"><span class="sk" style="display:block;width:70%;height:13px;margin-bottom:6px"></span>' +
-      '<span class="sk" style="display:block;width:40%;height:11px"></span></span></div></div>';
-    return '<div class="feed">' + one + one + one + "</div>";
-  }
-
-  function renderHome() {
-    var el = $("screen-home");
-
-    if (!st.homeLoaded) {
-      el.innerHTML = '<div class="shead"><h2>This week</h2></div>' + skeletonFeed();
-      setTimeout(function () {
-        st.homeLoaded = true;
-        if (st.tab === "home") renderHome();
-      }, 350);
-      return;
-    }
-
-    var sk = streakWeeks();
-    var html = "";
-
-    /* your own latest movement */
-    var mine = st.fresh ? findDish(st.fresh) : null;
-    html += '<div class="shead"><h2>This week</h2><span class="sub">' +
-      (sk > 0 ? sk + "-week streak" : "no streak yet") + "</span></div>";
-
-    html += '<div class="feed">';
-
-    if (mine) {
-      html += '<div class="card fcard">' +
-        '<div class="fhead"><span class="avatar">You</span><span class="who"><b>You</b> cooked</span>' +
-        "<time>" + ago(mine.lastTs) + "</time></div>" +
-        '<div class="fbody">' + tile(mine, "md") +
-        "<span><span class=\"name\">" + esc(mine.name) + '</span><div class="src">' + esc(mine.src) + "</div></span></div>" +
-        '<div class="badges"><span class="badge badge-move">Moved to #' + (rotation.indexOf(mine) + 1) + "</span>" +
-        '<span class="badge badge-rep">Cooked ' + (mine.reps || 1) + "×</span></div></div>";
-    }
-
-    FRIENDS.forEach(function (f) {
-      f.feed.forEach(function (item, ii) {
-        var have = findDish(item.dish);
-        var inWant = wantList.some(function (w) { return w.name.toLowerCase() === item.dish.toLowerCase(); });
-        html += '<div class="card fcard">' +
-          '<div class="fhead"><span class="avatar">' + f.init + "</span>" +
-          '<span class="who"><b>' + f.who + "</b> cooked</span><time>" + item.when + "</time></div>" +
-          '<div class="fbody">' + tile({ name: item.dish }, "md") +
-          "<span><span class=\"name\">" + esc(item.dish) + '</span><div class="src">' +
-          esc(item.src) + " · " + item.occ + "</div></span></div>" +
-          '<div class="badges">' +
-          (item.move ? '<span class="badge badge-move">' + esc(item.move) + "</span>" : "") +
-          '<span class="badge badge-rep">Cooked ' + item.reps + "×</span>" +
-          (have ? '<span class="badge badge-plain">On your list at ' + fmt(scoreOf(have)) + "</span>" : "") +
-          "</div>" +
-          (!have && !inWant
-            ? '<div class="factions"><button class="btn btn-secondary btn-sm" data-savefeed="' +
-              esc(f.who) + ":" + ii + '">Save to cook</button></div>'
-            : (!have && inWant ? '<div class="factions"><span class="badge badge-plain">Saved to your queue</span></div>' : "")) +
-          "</div>";
-      });
-    });
-
-    html += "</div>";
-    el.innerHTML = html;
-  }
-
-  /* ================= RANKINGS ================= */
-
-  var FILTERS = [
-    { k: "all", label: "Overall" },
-    { k: "weeknight", label: "Weeknight" },
-    { k: "quick", label: "Quick" },
-    { k: "cheap", label: "Cheap" },
-    { k: "healthy", label: "Healthy" },
-    { k: "fav", label: "Household favorites" }
-  ];
-
-  function passesFilter(x) {
-    if (st.filter === "all") return true;
-    if (st.filter === "weeknight") return x.occ === "weeknight";
-    if (st.filter === "fav") return (x.hh || []).length >= HOUSEHOLD.length;
-    return (x.tags || []).indexOf(st.filter) >= 0;
-  }
-
-  function renderRankings() {
-    var el = $("screen-rankings");
-    var html = '<div class="chiprow" role="group" aria-label="Filters">' +
-      FILTERS.map(function (f) {
-        return '<button class="chip" data-filter="' + f.k + '" aria-pressed="' + (st.filter === f.k) + '">' + f.label + "</button>";
-      }).join("") + "</div>";
-
-    var shown = 0;
-    TIER_ORDER.forEach(function (t) {
-      var items = tierItems(t).filter(passesFilter);
-      if (!items.length) return;
-      html += '<div class="shead"><h2>' + BANDS[t].label + '</h2><span class="sub">' +
-        fmt(BANDS[t].lo) + " – " + fmt(BANDS[t].hi) + "</span></div>";
-      html += items.map(mealRow).join("");
-      shown += items.length;
-    });
-
-    if (!shown) html += emptyState("nothing here yet", "No dishes match this filter. Cook something and log it.", "Log a meal");
-    el.innerHTML = html;
-  }
-
-  /* ================= QUEUE ================= */
-
-  function renderQueue() {
-    var el = $("screen-queue");
-    var html = '<div class="shead"><h2>To cook</h2><span class="sub">' + wantList.length + " saved</span></div>";
-    html += '<div class="pagepad" style="padding-top:4px;padding-bottom:12px;display:flex;gap:8px">' +
-      '<input class="field" id="want-draft" placeholder="Save something to cook later" value="' + esc(st.wantDraft) + '" autocomplete="off" enterkeyhint="done" style="flex:1">' +
-      '<button class="btn btn-secondary" id="want-add"' + (st.wantDraft.trim() ? "" : " disabled") + ">Save</button></div>";
-
-    if (!wantList.length) {
-      html += emptyState("an empty queue", "Save dishes from your friends&rsquo; cooking on Home, or type one above.");
-    } else {
-      html += wantList.map(function (w, i) {
-        return '<div class="mrow" style="cursor:default">' +
-          '<span class="rank" style="font-size:13px">·</span>' +
-          tile({ name: w.name }, "sm") +
-          "<span><span class=\"name\">" + esc(w.name) + "</span>" +
-          '<span class="meta2"><span>' + esc(w.src) + "</span><span>" + w.occ + "</span><span>from " + esc(w.from) + "</span></span></span>" +
-          '<span style="display:flex;gap:6px">' +
-          '<button class="btn btn-primary btn-sm" data-cookwant="' + i + '">Cooked it</button>' +
-          '<button class="btn btn-quiet btn-sm" data-dropwant="' + i + '" aria-label="Remove ' + esc(w.name) + '">✕</button></span></div>';
-      }).join("");
-    }
-    el.innerHTML = html;
-  }
-
-  /* ================= LOG FLOW ================= */
-
-  function renderLog() {
-    var L = st.log, el = $("screen-log"), html = "";
-
-    if (L.step === "pick") {
-      html = '<div class="flow">' +
-        '<div class="step">Log a meal</div>' +
-        "<h2>What did you cook?</h2>" +
-        '<p class="lede">Name it, or paste a recipe link. No review to write — one question and a couple of taps.</p>' +
-
-        '<div class="fgroup"><input class="field" id="draft" placeholder="e.g. marry-me chicken" value="' + esc(L.draft) + '" autocomplete="off" enterkeyhint="next"></div>' +
-        '<div class="fgroup"><input class="field" id="url" inputmode="url" placeholder="Recipe link (optional)" value="' + esc(L.url) + '" autocomplete="off"></div>' +
-
-        '<div class="fgroup"><label>Photo (optional)</label>' +
-        '<button class="photobtn" id="photo-pick" type="button">' +
-        (L.thumb ? '<img src="' + L.thumb + '" alt="">Photo added — tap to replace' : "Add a photo of the plate") +
-        '</button><input type="file" id="photo-file" accept="image/*" hidden></div>' +
-
-        '<div class="fgroup"><label>What kind of cook was it?</label><div class="chiprow">' +
-        [["weeknight", "Weeknight"], ["project", "Project"], ["hosting", "Hosting"]].map(function (o) {
-          return '<button class="chip" data-occ="' + o[0] + '" aria-pressed="' + (L.occ === o[0]) + '">' + o[1] + "</button>";
-        }).join("") + "</div></div>" +
-
-        '<div class="fgroup"><label>Tags</label><div class="chiprow">' +
-        [["quick", "Quick"], ["cheap", "Cheap"], ["healthy", "Healthy"]].map(function (o) {
-          return '<button class="chip" data-tag="' + o[0] + '" aria-pressed="' + (L.tags.indexOf(o[0]) >= 0) + '">' + o[1] + "</button>";
-        }).join("") + "</div></div>" +
-
-        '<div class="fgroup"><label>Who ate it?</label><div class="chiprow">' +
-        HOUSEHOLD.map(function (m) {
-          return '<button class="chip" data-hh="' + m + '" aria-pressed="' + (L.hh.indexOf(m) >= 0) + '">' + m + "</button>";
-        }).join("") + "</div></div>" +
-
-        '<div class="fgroup"><label>Modifications (optional)</label>' +
-        '<textarea class="field" id="mods" placeholder="e.g. half the butter, doubled the garlic">' + esc(L.mods) + "</textarea></div>" +
-
-        '<button class="btn btn-primary btn-block" id="go-tier"' + (L.draft.trim() ? "" : " disabled") + ">Continue</button>";
-
-      if (wantList.length) {
-        html += '<div class="shead" style="padding-left:0;padding-right:0"><h2 style="font-size:14px">From your queue</h2></div>' +
-          '<div style="display:flex;flex-direction:column;gap:8px">' +
-          wantList.slice(0, 3).map(function (c, i) {
-            return '<button class="btn btn-secondary" style="justify-content:flex-start" data-want="' + i + '">' +
-              esc(c.name) + '&nbsp;<span style="color:var(--muted);font-weight:400">· ' + esc(c.src) + "</span></button>";
-          }).join("") + "</div>";
-      }
-      html += "</div>";
-    }
-
-    if (L.step === "tier") {
-      html = '<div class="flow">' +
-        '<div class="step">One question</div>' +
-        "<h2>Would you make " + esc(L.dish.name) + " again?</h2>" +
-        '<p class="lede">Not &ldquo;was it good.&rdquo; Would you spend an evening on it again. Your answer already accounts for how it went.</p>' +
-        '<div class="tiers">' +
-          '<button class="tierbtn" data-tier="yes"><span><strong>Yes</strong><span class="d">It&rsquo;s earning a place in the rotation</span></span><span class="bn">7.0–10.0</span></button>' +
-          '<button class="tierbtn" data-tier="maybe"><span><strong>Maybe</strong><span class="d">Fine, but I&rsquo;d need a reason</span></span><span class="bn">4.0–6.9</span></button>' +
-          '<button class="tierbtn" data-tier="no"><span><strong>No</strong><span class="d">Not making that twice</span></span><span class="bn">0.0–3.9</span></button>' +
-        "</div></div>";
-    }
-
-    if (L.step === "compare") {
-      var items = tierItems(L.tier);
-      var against = items[Math.floor((L.lo + L.hi) / 2)];
-      var bars = "";
-      for (var i = 0; i < L.est; i++) bars += '<i class="' + (i < L.seen ? "on" : "") + '"></i>';
-      html = '<div class="flow">' +
-        '<div class="step">Comparison ' + (L.seen + 1) + " of ~" + L.est + "</div>" +
-        '<div class="pbar">' + bars + "</div>" +
-        "<h2>Which would you rather make again?</h2>" +
-        '<p class="lede">A couple of these and it&rsquo;s placed — no stars involved.</p>' +
-        '<div class="duelwrap">' +
-          '<button class="duel" data-win="new">' + tile(L.dish, "lg") +
-            '<span class="dinfo"><span class="dlabel">The new one</span>' +
-            '<span class="dname">' + esc(L.dish.name) + '</span>' +
-            '<span class="dctx">' + esc(L.dish.src) + "</span></span></button>" +
-          '<div class="duel-or">or</div>' +
-          '<button class="duel" data-win="old">' + tile(against, "lg") +
-            '<span class="dinfo"><span class="dlabel">Ranked ' + fmt(scoreOf(against)) + "</span>" +
-            '<span class="dname">' + esc(against.name) + '</span>' +
-            '<span class="dctx">' + esc(against.src) + " · cooked " + (against.reps || 1) + "×</span></span></button>" +
-        "</div>" +
-        '<div class="duel-alts">' +
-          '<button class="btn btn-quiet btn-sm" data-same="1">About the same</button>' +
-          '<button class="btn btn-quiet btn-sm" data-skip="1">Skip</button>' +
-        "</div></div>";
-    }
-
-    if (L.step === "reveal") {
-      var x = L.dish, idx = rotation.indexOf(x);
-      var win = rotation.slice(Math.max(0, idx - 2), idx + 3);
-      var sk2 = streakWeeks();
-      html = '<div class="reveal">' +
-        '<div class="step">Placed</div>' +
-        '<div class="big">' + fmt(scoreOf(x)) + "</div>" +
-        '<div class="dn">' + esc(x.name) + "</div>" +
-        '<div class="pl">#' + (idx + 1) + " of " + rotation.length + " in your rotation</div>" +
-        (sk2 > 1 ? '<div class="streakline">' + sk2 + "-week streak — still going</div>" : "") +
-        '<div class="nbs">' + win.map(function (y) {
-          return '<div class="nb' + (y === x ? " isnew" : "") + '">' +
-            "<span>" + (rotation.indexOf(y) + 1) + ". " + esc(y.name) +
-            '</span><span class="n">' + fmt(scoreOf(y)) + "</span></div>";
-        }).join("") + "</div>" +
-        '<button class="btn btn-primary btn-block" id="see-rank">See the rankings</button>' +
-        '<div style="height:8px"></div>' +
-        '<button class="btn btn-secondary btn-block" id="log-another">Log another</button></div>';
-    }
-
-    el.innerHTML = html;
-  }
-
-  function beginCompare() {
-    var L = st.log, items = tierItems(L.tier);
-    L.lo = 0; L.hi = items.length; L.seen = 0; L.skips = 0;
-    L.est = Math.max(1, Math.ceil(Math.log(items.length + 1) / Math.log(2)));
-    if (!items.length) { finishInsert(); return; }
-    L.step = "compare";
-    renderLog();
-  }
-
-  function stepCompare(newWins) {
-    var L = st.log, mid = Math.floor((L.lo + L.hi) / 2);
-    if (newWins) L.hi = mid; else L.lo = mid + 1;
-    L.seen++;
-    if (L.lo >= L.hi) { finishInsert(); return; }
-    renderLog();
-  }
-
-  function sameCompare() {
-    /* "About the same" — settle right here, next to the anchor */
-    var L = st.log;
-    L.lo = Math.floor((L.lo + L.hi) / 2);
-    finishInsert();
-  }
-
-  function skipCompare() {
-    /* Skip this pairing without information; give up after 2 skips */
-    var L = st.log;
-    L.skips++;
-    if (L.skips >= 2) { L.lo = Math.floor((L.lo + L.hi) / 2); finishInsert(); return; }
-    /* nudge the window one step so a different anchor appears */
-    if (L.hi - L.lo > 1) L.hi--;
-    renderLog();
-  }
-
-  function lastIndexOfTier(t) {
-    var order = TIER_ORDER.indexOf(t);
-    for (var i = 0; i < rotation.length; i++) {
-      if (TIER_ORDER.indexOf(rotation[i].tier) > order) return i;
-    }
-    return rotation.length;
-  }
-
-  function finishInsert() {
-    var L = st.log, items = tierItems(L.tier), anchor = items[L.lo];
-    var gi = anchor ? rotation.indexOf(anchor) : lastIndexOfTier(L.tier);
-
-    var existing = rotation.filter(function (x) {
-      return x !== L.dish && x.name.toLowerCase() === L.dish.name.toLowerCase();
-    })[0];
-    if (existing) {
-      L.dish.reps = (existing.reps || 1) + 1;
-      L.dish.hist = [Date.now()].concat(existing.hist || []);
-      L.dish.thumb = L.dish.thumb || existing.thumb;
-      L.dish.mods = L.dish.mods || existing.mods;
-      var ei = rotation.indexOf(existing);
-      rotation.splice(ei, 1);
-      if (ei < gi) gi--;
-    } else {
-      L.dish.hist = [Date.now()];
-    }
-    L.dish.lastTs = Date.now();
-    rotation.splice(gi, 0, L.dish);
-
-    wantList = wantList.filter(function (w) {
-      return w.name.toLowerCase() !== L.dish.name.toLowerCase();
-    });
-
-    cookLog.push(Date.now());
-    st.fresh = L.dish.name;
-    persist();
-    L.step = "reveal";
-    renderLog(); renderBar();
-  }
-
-  function startLogWith(dish) {
-    st.log = newLog();
-    st.log.dish = dish;
-    st.log.step = "tier";
-    setTab("log");
-  }
-
-  function buildDishFromForm() {
-    var L = st.log;
+  function newLog(prefill) {
     return {
-      name: L.draft.trim(), src: L.url.trim() ? hostOf(L.url) : "Logged by you",
-      occ: L.occ, tier: null, reps: 1, cuisine: "", tags: L.tags.slice(),
-      hh: L.hh.slice(), mods: L.mods, thumb: L.thumb,
-      lastTs: Date.now(), hist: []
+      step: "search", q: "",
+      mealId: null,               // existing meal being re-logged
+      name: prefill && prefill.name || "",
+      url: prefill && prefill.url || "",
+      thumb: null, note: "", timeMins: null, effort: null,
+      ate: members().slice(),
+      again: null,
+      savedId: prefill && prefill.savedId || null,
+      reactions: {},
+      placedId: null, comparePending: false
     };
   }
 
-  function hostOf(u) {
-    try { return new URL(u.indexOf("http") === 0 ? u : "https://" + u).hostname.replace(/^www\./, ""); }
-    catch (e) { return "Link"; }
+  /* ================================================================ TONIGHT */
+
+  function recReliable() {
+    var pool = S.order.yes.filter(function (id) { return repsOf(id) >= 2; });
+    if (!pool.length) pool = S.order.yes.slice();
+    if (!pool.length) return null;
+    var scored = pool.map(function (id) {
+      var days = lastTsOf(id) ? (Date.now() - lastTsOf(id)) / DAY : 30;
+      return { id: id, s: Math.min(repsOf(id), 10) * 2 + (everyoneOK(id) ? 6 : 0) + Math.min(days, 56) / 7 };
+    }).sort(function (a, b) { return b.s - a.s; });
+    return scored[0].id;
+  }
+
+  function recQuick(excl) {
+    var pool = orderedIds().filter(function (id) {
+      if (id === excl || tierOf(id) === "no") return false;
+      var m = mealById(id);
+      return (m.timeMins && m.timeMins <= 30) || m.effort === "easy";
+    });
+    return pool[0] || null;
+  }
+
+  function recNew() {
+    var q = S.saved.filter(function (s) { return s.status === "queued"; })[0];
+    if (q) return { saved: q };
+    var once = orderedIds().filter(function (id) { return repsOf(id) === 1 && tierOf(id) !== "no"; });
+    if (once.length) return { meal: once[once.length - 1] };
+    return null;
+  }
+
+  function whyFor(id) {
+    var out = [], m = mealById(id), reps = repsOf(id), last = lastTsOf(id);
+    if (everyoneOK(id)) out.push("Everyone liked it last time");
+    if (repsOf(id) >= 4 && labelOf(id).k === "staple") out.push("A household staple");
+    if (reps > 1) out.push("Cooked " + reps + "×");
+    if (m.timeMins) out.push("Takes " + m.timeMins + " min");
+    if (last && Date.now() - last > 3 * WEEK) out.push("Not made in " + ago(last).replace(" ago", ""));
+    else if (last) out.push("Last made " + ago(last));
+    return out.slice(0, 4);
+  }
+
+  function recCard(kind, id, savedItem) {
+    if (savedItem) {
+      return '<div class="card rec">' +
+        '<div class="rhead"><span class="rkind">' + kind + "</span></div>" +
+        '<div class="rbody">' + tile({ name: savedItem.title }, "md") +
+        "<span><div class=\"rname\">" + esc(savedItem.title) + '</div><div class="rsrc">Saved from ' + esc(savedItem.from || savedItem.url || "your list") + "</div></span></div>" +
+        '<ul class="why"><li>Never tried</li><li>The queue is where staples come from</li></ul>' +
+        '<div class="ractions"><button class="btn btn-primary btn-sm" data-cooksaved="' + savedItem.id + '">Cook this tonight</button></div></div>';
+    }
+    var m = mealById(id);
+    if (!m) return "";
+    return '<div class="card rec">' +
+      '<div class="rhead"><span class="rkind">' + kind + "</span>" + labelHtml(id) + "</div>" +
+      '<div class="rbody">' + tile(m, "md") +
+      "<span><div class=\"rname\">" + esc(m.name) + '</div><div class="rsrc">#' + rankOf(id) + " in your rotation</div></span></div>" +
+      '<ul class="why">' + whyFor(id).map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("") + "</ul>" +
+      '<div class="ractions">' +
+        '<button class="btn btn-primary btn-sm" data-cookrec="' + id + '">Cooked this tonight</button>' +
+        '<button class="btn btn-quiet btn-sm" data-detail="' + id + '">Details</button>' +
+      "</div></div>";
+  }
+
+  function feedbackCard() {
+    var fb = S.fb;
+    function card(key, q) {
+      return '<div class="card fbcard"><p>' + q + '</p><span class="fbb">' +
+        '<button class="btn btn-secondary btn-sm" data-fb="' + key + ':yes">Yes</button>' +
+        '<button class="btn btn-secondary btn-sm" data-fb="' + key + ':no">Not really</button>' +
+        "</span></div>";
+    }
+    if (countEv("meal_logged") >= 3 && !fb.shown.logfast) return card("logfast", "Quick check — does logging a meal feel fast enough?");
+    if (countEv("recommendation_selected") >= 1 && !fb.shown.rechelp) return card("rechelp", "Did this recommendation help you decide dinner?");
+    if (S.comparisons.length >= 5 && !fb.shown.duels) return card("duels", "Do the head-to-head matchups feel meaningful?");
+    return "";
+  }
+
+  function renderTonight() {
+    var el = $("screen-tonight");
+
+    if (!S.household || st.onb) { renderOnboarding(el); return; }
+
+    if (S.meals.length < 3) {
+      el.innerHTML =
+        '<div class="onb"><span class="brand obrand">again</span>' +
+        '<p class="promise">Remember what your household actually liked — and always know what to cook next.</p>' +
+        "<h2>Add a few meals you already make</h2>" +
+        '<p class="lede">Three is enough to build your first ranking and get a real recommendation.</p>' +
+        '<button class="btn btn-primary" data-tab-go="log">Add a meal</button>' +
+        "</div>";
+      return;
+    }
+
+    var rel = recReliable();
+    var quick = recQuick(rel);
+    var nw = recNew();
+
+    track("recommendation_viewed", { reliable: !!rel, quick: !!quick, fresh: !!nw });
+
+    var html = '<div class="shead"><h2>What should we cook tonight?</h2>' +
+      '<span class="sub">' + (streakWeeks() > 0 ? streakWeeks() + "-week streak" : "") + "</span></div>";
+
+    html += feedbackCard();
+
+    html += '<div class="recwrap">';
+    if (rel) html += recCard("Reliable favorite", rel);
+    if (quick && quick !== rel) html += recCard("Quick option", quick);
+    else if (!quick) html += '<div class="card rec"><div class="rhead"><span class="rkind">Quick option</span></div>' +
+      '<p style="margin:0;font-size:13.5px;color:var(--muted)">Add cooking times to your meals and quick picks will show up here.</p></div>';
+    if (nw && nw.saved) html += recCard("Something new", null, nw.saved);
+    else if (nw && nw.meal && nw.meal !== rel && nw.meal !== quick) html += recCard("Something new", nw.meal);
+    else html += '<div class="card rec"><div class="rhead"><span class="rkind">Something new</span></div>' +
+      '<p style="margin:0;font-size:13.5px;color:var(--muted)">Nothing saved to try. Add a recipe on the Saved tab and it will appear here.</p>' +
+      '<div class="ractions"><button class="btn btn-secondary btn-sm" data-tab-go="saved">Open Saved</button></div></div>';
+    html += "</div>";
+
+    el.innerHTML = html;
+  }
+
+  /* ================================================================ ONBOARDING */
+
+  function renderOnboarding(el) {
+    if (!st.onb) {
+      st.onb = { step: 1, name: "", members: ["You"], mealNames: [], mealIds: [], duelN: 0 };
+      track("onboarding_started", {});
+      var joinName = new URLSearchParams(location.search).get("join");
+      if (joinName) { st.onb.name = joinName; st.onb.joined = true; }
+    }
+    var o = st.onb, html = "";
+
+    if (o.step === 1) {
+      html = '<div class="onb"><span class="brand obrand">again</span>' +
+        '<p class="promise">Remember what your household actually liked — and always know what to cook next.</p>' +
+        '<div class="steps">Step 1 of 3 — your household</div>' +
+        "<h2>" + (o.joined ? "You&rsquo;ve been invited to " + esc(o.name) : "Who eats with you?") + "</h2>" +
+        '<p class="lede">Name the household and list who&rsquo;s usually at the table.</p>' +
+        '<div class="fgroup"><label for="onb-name">Household name</label>' +
+        '<input class="field" id="onb-name" placeholder="e.g. The Lees, Apartment 4B" value="' + esc(o.name) + '"></div>' +
+        '<div class="fgroup"><label>People</label><div class="chiprow">' +
+        o.members.map(function (m, i) {
+          return '<button class="chip" aria-pressed="true" data-onb-member="' + i + '">' + esc(m) + (i > 0 ? " ✕" : "") + "</button>";
+        }).join("") + "</div>" +
+        '<div style="display:flex;gap:8px;margin-top:8px">' +
+        '<input class="field" id="onb-member" placeholder="Add a person" style="flex:1">' +
+        '<button class="btn btn-secondary" id="onb-member-add">Add</button></div></div>' +
+        '<button class="btn btn-primary btn-block" id="onb-next1">Continue</button>' +
+        '<div style="height:8px"></div>' +
+        '<button class="btn btn-quiet btn-block" id="onb-demo">Explore with demo data instead</button>' +
+        "</div>";
+    }
+
+    if (o.step === 2) {
+      html = '<div class="onb">' +
+        '<div class="steps">Step 2 of 3 — your current rotation</div>' +
+        "<h2>Add three meals you already make</h2>" +
+        '<p class="lede">Whatever&rsquo;s actually in the rotation — not aspirations.</p>' +
+        '<div style="display:flex;gap:8px"><input class="field" id="onb-meal" placeholder="e.g. sheet-pan chicken" style="flex:1">' +
+        '<button class="btn btn-secondary" id="onb-meal-add">Add</button></div>' +
+        '<div class="addedlist">' + o.mealNames.map(function (n, i) {
+          return '<div class="ai"><span>' + esc(n) + '</span><button class="btn btn-quiet btn-sm" data-onb-meal-del="' + i + '">✕</button></div>';
+        }).join("") + "</div>" +
+        '<button class="btn btn-primary btn-block" id="onb-next2"' + (o.mealNames.length >= 3 ? "" : " disabled") + ">" +
+        (o.mealNames.length >= 3 ? "Rank them" : "Add " + (3 - o.mealNames.length) + " more") + "</button></div>";
+    }
+
+    if (o.step === 3) {
+      var pair = onbPair();
+      html = '<div class="onb">' +
+        '<div class="steps">Step 3 of 3 — first ranking</div>' +
+        "<h2>Which would you rather make again?</h2>" +
+        '<p class="lede">Two quick matchups. No stars, no scores to invent.</p>' +
+        duelHtml(mealById(pair[0]), mealById(pair[1]), "", "") +
+        "</div>";
+    }
+
+    if (o.step === 4) {
+      var rel = recReliable();
+      html = '<div class="onb"><div class="steps">Done</div>' +
+        "<h2>" + esc(S.household.name) + "&rsquo;s first rotation</h2>" +
+        '<p class="lede">Log meals as you cook and this list starts earning its keep.</p>' +
+        '<div style="border-top:1px solid var(--border);margin-bottom:16px">' +
+        orderedIds().map(function (id, i) {
+          return '<div class="nb"><span>' + (i + 1) + ". " + esc(mealById(id).name) + "</span><span class=\"n\">" + labelOf(id).txt + "</span></div>";
+        }).join("") + "</div>" +
+        (rel ? '<div class="card rec">' +
+          '<div class="rhead"><span class="rkind">Tonight&rsquo;s suggestion</span></div>' +
+          '<div class="rbody">' + tile(mealById(rel), "md") + "<span><div class=\"rname\">" + esc(mealById(rel).name) + "</div></span></div>" +
+          '<ul class="why">' + whyFor(rel).map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("") + "</ul></div>" : "") +
+        '<div style="height:16px"></div>' +
+        '<button class="btn btn-primary btn-block" id="onb-finish">Start using again</button></div>';
+    }
+
+    el.innerHTML = html;
+    var f = $("onb-name") || $("onb-meal");
+    if (f && o.step < 3) f.focus();
+  }
+
+  function onbPair() {
+    var o = st.onb;
+    if (o.duelN === 0) return [o.mealIds[0], o.mealIds[1]];
+    return [S.order.yes[0], o.mealIds[2]];
+  }
+
+  function onbDuel(result) {
+    var o = st.onb, ids = o.mealIds, pair = onbPair();
+    S.comparisons.push({ a: pair[0], b: pair[1], result: result, ts: Date.now() });
+    if (result === "skip") track("comparison_skipped", { where: "onboarding" });
+    else track("comparison_completed", { where: "onboarding", result: result });
+
+    if (o.duelN === 0) {
+      /* order the first two; the rest keep their entry order behind them */
+      var rest = ids.slice(2);
+      S.order.yes = (result === "b" ? [ids[1], ids[0]] : [ids[0], ids[1]]).concat(rest);
+      o.duelN = 1;
+    } else {
+      /* place the third against the current winner */
+      var C = ids[2];
+      var band = S.order.yes.filter(function (id) { return id !== C; });
+      if (result === "b") S.order.yes = [C].concat(band);                       /* C beats the winner */
+      else if (result === "skip") S.order.yes = band.concat([C]);               /* no signal — end */
+      else S.order.yes = [band[0], C].concat(band.slice(1));                    /* lost or tied — middle */
+      o.step = 4;
+    }
+    save();
+    renderTonight();
+  }
+
+  function finishOnboarding() {
+    track("onboarding_completed", { meals: S.meals.length, joined: !!st.onb.joined });
+    if (st.onb.joined) track("household_invite_accepted", {});
+    st.onb = null;
+    if (history.replaceState) history.replaceState(null, "", location.pathname);
+    setTab("tonight");
+    toast("You're set. Log meals as you cook.");
+  }
+
+  function loadDemo() {
+    var s = blankStore();
+    s.household = { name: "The demo household", members: ["You", "Sam", "The kids"] };
+    var defs = [
+      ["Sheet-pan chicken thighs with lemon", 30, "easy", 6, ["You", "Sam", "The kids"], { You: "loved", Sam: "loved", "The kids": "fine" }],
+      ["Marcella's tomato, butter and onion sauce", 45, "easy", 5, ["You", "Sam", "The kids"], { You: "loved", Sam: "loved", "The kids": "loved" }],
+      ["Gochujang buttered noodles", 20, "easy", 4, ["You", "Sam"], { You: "loved", Sam: "fine" }],
+      ["Cast-iron pan pizza", 90, "involved", 3, ["You", "Sam", "The kids"], { You: "loved", Sam: "loved", "The kids": "loved" }],
+      ["Miso-glazed salmon", 25, "medium", 2, ["You", "Sam"], { You: "fine", Sam: "fine" }],
+      ["Cacio e pepe", 25, "medium", 2, ["You"], { You: "fine" }],
+      ["Braised short ribs", 180, "involved", 1, ["You", "Sam"], { You: "loved", Sam: "fine" }]
+    ];
+    var tiers = ["yes", "yes", "yes", "yes", "maybe", "maybe", "yes"];
+    defs.forEach(function (d, i) {
+      var id = uid();
+      s.meals.push({ id: id, name: d[0], url: "", thumb: null, timeMins: d[1], effort: d[2],
+        tags: [], createdAt: Date.now() - 90 * DAY, mods: i === 1 ? "Half the butter — nobody noticed." : "" });
+      s.order[tiers[i]].push(id);
+      for (var k = 0; k < d[3]; k++) {
+        s.events.push({ mealId: id, ts: Date.now() - (k * 12 + i * 2 + 1) * DAY,
+          ate: d[4], reactions: k === 0 ? d[5] : {}, note: "", again: tiers[i] });
+      }
+    });
+    s.saved = [
+      { id: uid(), title: "Marry-me chicken", url: "", from: "TikTok", status: "queued" },
+      { id: uid(), title: "Birria tacos", url: "", from: "YouTube", status: "queued" }
+    ];
+    s.analytics = S.analytics;
+    S = s;
+    save();
+    st.onb = null;
+    track("onboarding_completed", { demo: true });
+    setTab("tonight");
+    toast("Demo household loaded — explore freely");
+  }
+
+  /* ================================================================ ROTATION */
+
+  var VIEWS = [
+    { k: "all", label: "Best overall", f: function () { return true; } },
+    { k: "weeknight", label: "Weeknight", f: function (m) { return (m.timeMins && m.timeMins <= 45) && m.effort !== "involved"; } },
+    { k: "quick", label: "Quick", f: function (m) { return m.timeMins && m.timeMins <= 25; } },
+    { k: "easy", label: "Low effort", f: function (m) { return m.effort === "easy"; } },
+    { k: "fav", label: "Household favorites", f: function (m) { return everyoneOK(m.id); } },
+    { k: "occasion", label: "Special occasion", f: function (m) { return m.effort === "involved"; } }
+  ];
+
+  function renderRotation() {
+    var el = $("screen-rotation");
+    var html = '<div class="chiprow" role="group" aria-label="Views">' +
+      VIEWS.map(function (v) {
+        return '<button class="chip" data-view="' + v.k + '" aria-pressed="' + (st.view === v.k) + '">' + v.label + "</button>";
+      }).join("") + "</div>";
+
+    var view = VIEWS.filter(function (v) { return v.k === st.view; })[0] || VIEWS[0];
+    var ids = orderedIds().filter(function (id) {
+      var m = mealById(id);
+      return m && view.f(Object.assign({ id: id }, m));
+    });
+
+    if (!S.meals.length) {
+      html += '<div class="empty"><span class="brand">nothing logged yet</span>' +
+        "<p>Log your first meal and the rotation starts here.</p>" +
+        '<button class="btn btn-primary btn-sm" data-tab-go="log">Log a meal</button></div>';
+    } else if (!ids.length) {
+      html += '<div class="empty"><p>No meals match this view yet. Cooking times and effort are set on each meal&rsquo;s detail page.</p></div>';
+    } else {
+      html += ids.map(function (id) { return mealRow(id); }).join("");
+      if (S.order.yes.length >= 4) {
+        html += '<div style="padding:16px;text-align:center">' +
+          '<button class="btn btn-secondary btn-sm" id="refine-btn">Refine rankings — one quick matchup</button></div>';
+      }
+    }
+    el.innerHTML = html;
+  }
+
+  /* refine: compare a random adjacent pair in the yes band */
+  function refinePair() {
+    var band = S.order.yes;
+    if (band.length < 2) return null;
+    var i = Math.floor(Math.random() * (band.length - 1));
+    return [band[i], band[i + 1]];
+  }
+
+  var refineIds = null;
+  function startRefine() {
+    refineIds = refinePair();
+    if (!refineIds) return;
+    var el = $("screen-rotation");
+    el.innerHTML = '<div class="flow">' +
+      '<div class="step">Refine rankings</div>' +
+      "<h2>Which would you rather make again?</h2>" +
+      duelHtml(mealById(refineIds[0]), mealById(refineIds[1]),
+        "#" + rankOf(refineIds[0]), "#" + rankOf(refineIds[1])) +
+      "</div>";
+    st.duelCb = function (result) {
+      S.comparisons.push({ a: refineIds[0], b: refineIds[1], result: result, ts: Date.now() });
+      if (result === "b") {
+        var band = S.order.yes;
+        var i = band.indexOf(refineIds[0]), j = band.indexOf(refineIds[1]);
+        if (i >= 0 && j >= 0) { band[i] = refineIds[1]; band[j] = refineIds[0]; }
+        track("comparison_completed", { where: "refine", result: "b" });
+      } else if (result === "a" || result === "same") {
+        track("comparison_completed", { where: "refine", result: result });
+      } else {
+        track("comparison_skipped", { where: "refine" });
+      }
+      save();
+      st.duelCb = null;
+      renderRotation();
+      if (result !== "skip") toast("Noted");
+    };
+  }
+
+  /* ================================================================ LOG */
+
+  function renderLog() {
+    var L = st.log || (st.log = newLog());
+    var el = $("screen-log"), html = "";
+
+    if (L.step === "search") {
+      var q = L.q.trim().toLowerCase();
+      var hits = S.meals.filter(function (m) {
+        return !q || m.name.toLowerCase().indexOf(q) >= 0;
+      }).sort(function (a, b) { return (lastTsOf(b.id) || 0) - (lastTsOf(a.id) || 0); }).slice(0, 5);
+
+      html = '<div class="flow">' +
+        '<div class="step">Log a meal</div>' +
+        "<h2>What did you cook?</h2>" +
+        '<p class="lede">Pick a meal you&rsquo;ve made before, or type a new one.</p>' +
+        '<input class="field" id="log-q" placeholder="Search or add a meal" value="' + esc(L.q) + '" autocomplete="off" enterkeyhint="go">' +
+        '<div class="hitlist">' +
+        hits.map(function (m) {
+          return '<button class="hit" data-loghit="' + m.id + '">' + tile(m, "sm") +
+            "<span><span class=\"hn\">" + esc(m.name) + '</span><div class="hm">' + repsOf(m.id) + "× · " + ago(lastTsOf(m.id)) + '</div></span><span class="htag">Cooked again</span></button>';
+        }).join("") +
+        (q && !mealByName(L.q)
+          ? '<button class="hit" data-lognew="1"><span class="tile tile-sm">+</span>' +
+            "<span><span class=\"hn\">Add &ldquo;" + esc(L.q.trim()) + "&rdquo;</span><div class=\"hm\">New meal</div></span><span class=\"htag\">Add</span></button>"
+          : "") +
+        "</div></div>";
+    }
+
+    if (L.step === "ctx") {
+      var isRepeat = !!L.mealId;
+      var name = isRepeat ? mealById(L.mealId).name : L.name;
+      html = '<div class="flow">' +
+        '<div class="step">' + (isRepeat ? "Cooked again" : "New meal") + "</div>" +
+        "<h2>" + esc(name) + "</h2>" +
+
+        '<div class="fgroup"><label>Who ate it?</label><div class="chiprow">' +
+        members().map(function (m) {
+          return '<button class="chip" data-ate="' + esc(m) + '" aria-pressed="' + (L.ate.indexOf(m) >= 0) + '">' + esc(m) + "</button>";
+        }).join("") + "</div></div>" +
+
+        '<div class="fgroup"><label>Would you make it again?</label><div class="tiers horiz">' +
+          '<button class="tierbtn" data-again="yes" aria-pressed="' + (L.again === "yes") + '"><strong>Yes</strong><span class="d">Keep it coming</span></button>' +
+          '<button class="tierbtn" data-again="maybe" aria-pressed="' + (L.again === "maybe") + '"><strong>Maybe</strong><span class="d">With a reason</span></button>' +
+          '<button class="tierbtn" data-again="no" aria-pressed="' + (L.again === "no") + '"><strong>No</strong><span class="d">Retire it</span></button>' +
+        "</div></div>" +
+
+        '<details class="moredetails"><summary>Add details (photo, link, note, time)</summary><div>' +
+          '<div class="fgroup"><button class="photobtn" id="photo-pick" type="button">' +
+          (L.thumb ? '<img src="' + L.thumb + '" alt="">Photo added — tap to replace' : "Add a photo (optional)") +
+          '</button><input type="file" id="photo-file" accept="image/*" hidden></div>' +
+          '<div class="fgroup"><input class="field" id="log-url" inputmode="url" placeholder="Recipe link (optional)" value="' + esc(L.url) + '"></div>' +
+          '<div class="fgroup"><input class="field" id="log-note" placeholder="Modification note — e.g. used less sugar" value="' + esc(L.note) + '"></div>' +
+          '<div class="fgroup"><label>Cooking time</label><div class="chiprow">' +
+            [15, 25, 40, 60].map(function (t) {
+              return '<button class="chip" data-time="' + t + '" aria-pressed="' + (L.timeMins === t) + '">' + (t === 60 ? "60+ min" : t + " min") + "</button>";
+            }).join("") + "</div></div>" +
+          '<div class="fgroup"><label>Effort</label><div class="chiprow">' +
+            [["easy", "Easy"], ["medium", "Medium"], ["involved", "A project"]].map(function (o) {
+              return '<button class="chip" data-effort="' + o[0] + '" aria-pressed="' + (L.effort === o[0]) + '">' + o[1] + "</button>";
+            }).join("") + "</div></div>" +
+        "</div></details>" +
+
+        '<button class="btn btn-primary btn-block" id="log-save"' + (L.again ? "" : " disabled") + ">Save</button>" +
+        '<div style="height:8px"></div>' +
+        '<button class="btn btn-quiet btn-block" id="log-cancel">Cancel</button>' +
+        "</div>";
+    }
+
+    if (L.step === "confirm") {
+      var id = L.placedId, m2 = mealById(id);
+      var sk = streakWeeks();
+      html = '<div class="reveal">' +
+        '<div class="headline">Logged.</div>' +
+        '<div class="dn">' + esc(m2.name) + "</div>" +
+        '<div class="pl">#' + rankOf(id) + " of " + S.meals.length + " · " + repsOf(id) + "× cooked · " + labelOf(id).txt + "</div>" +
+        (sk > 1 ? '<div class="streakline">' + sk + "-week cooking streak</div>" : "") +
+
+        '<div class="reactblock"><h3>How did it go over? <span style="font-weight:400;text-transform:none">(optional)</span></h3>' +
+        L.ate.map(function (mem) {
+          var r = L.reactions[mem] || "";
+          return '<div class="reactrow"><span class="rn">' + esc(mem) + '</span><span class="seg">' +
+            '<button class="s-loved" data-react="' + esc(mem) + ':loved" aria-pressed="' + (r === "loved") + '">Loved it</button>' +
+            '<button class="s-fine" data-react="' + esc(mem) + ':fine" aria-pressed="' + (r === "fine") + '">Fine</button>' +
+            '<button class="s-never" data-react="' + esc(mem) + ':never" aria-pressed="' + (r === "never") + '">Not again</button>' +
+            "</span></div>";
+        }).join("") + "</div>" +
+
+        (L.comparePending
+          ? '<div class="reactblock"><h3>One quick matchup? <span style="font-weight:400;text-transform:none">(optional)</span></h3>' +
+            (function () {
+              var band = S.order[tierOf(id)];
+              var others = band.filter(function (x) { return x !== id; });
+              if (!others.length) return "";
+              var mid = others[Math.floor(others.length / 2)];
+              L.compareWith = mid;
+              return duelHtml(m2, mealById(mid), "Just cooked", "#" + rankOf(mid));
+            })() + "</div>"
+          : "") +
+
+        '<button class="btn btn-primary btn-block" id="log-done">Done</button>' +
+        "</div>";
+    }
+
+    el.innerHTML = html;
+    if (L.step === "search") { var qf = $("log-q"); if (qf) { qf.focus(); qf.setSelectionRange(qf.value.length, qf.value.length); } }
+  }
+
+  function saveLogEvent() {
+    var L = st.log;
+    var m;
+    if (L.mealId) {
+      m = mealById(L.mealId);
+      if (L.url) m.url = L.url;
+      if (L.thumb) m.thumb = L.thumb;
+      if (L.timeMins) m.timeMins = L.timeMins;
+      if (L.effort) m.effort = L.effort;
+      if (L.note) m.mods = L.note;
+    } else {
+      m = { id: uid(), name: L.name.trim(), url: L.url, thumb: L.thumb,
+        timeMins: L.timeMins, effort: L.effort, tags: [], createdAt: Date.now(), mods: L.note };
+      S.meals.push(m);
+    }
+
+    S.events.push({ mealId: m.id, ts: Date.now(), ate: L.ate.slice(),
+      reactions: {}, note: L.note, again: L.again });
+
+    var prevTier = tierOf(m.id);
+    var isRepeat = !!L.mealId;
+
+    if (!prevTier) {
+      /* new meal: append to chosen band; offer one placement comparison */
+      placeInBand(m.id, L.again, null);
+      L.comparePending = S.order[L.again].length > 1;
+    } else if (prevTier !== L.again) {
+      /* answer changed: move bands, keep it simple — append; offer comparison */
+      placeInBand(m.id, L.again, null);
+      L.comparePending = S.order[L.again].length > 1;
+    } else {
+      L.comparePending = false;
+    }
+
+    /* saved recipe graduates */
+    if (L.savedId) {
+      S.saved.forEach(function (s) { if (s.id === L.savedId) s.status = "cooked"; });
+    } else {
+      S.saved.forEach(function (s) {
+        if (s.title.trim().toLowerCase() === m.name.trim().toLowerCase()) s.status = "cooked";
+      });
+    }
+
+    st.fresh = m.id;
+    L.placedId = m.id;
+    L.step = "confirm";
+    save();
+
+    track(isRepeat ? "repeat_cook_logged" : "meal_logged", { mealId: m.id });
+    renderLog();
+    renderBar();
+  }
+
+  function applyConfirmReactions() {
+    var L = st.log;
+    if (!L || !L.placedId) return;
+    var evs = eventsOf(L.placedId);
+    if (evs[0]) { evs[0].reactions = L.reactions; }
+    save();
+  }
+
+  function confirmDuel(result) {
+    var L = st.log;
+    var id = L.placedId, other = L.compareWith;
+    S.comparisons.push({ a: id, b: other, result: result, ts: Date.now() });
+    if (result === "skip") { track("comparison_skipped", { where: "placement" }); }
+    else {
+      track("comparison_completed", { where: "placement", result: result });
+      var band = S.order[tierOf(id)];
+      band.splice(band.indexOf(id), 1);
+      var oi = band.indexOf(other);
+      if (result === "a") band.splice(oi, 0, id);          /* new wins → above anchor */
+      else if (result === "b") band.splice(oi + 1, 0, id);  /* anchor wins → below */
+      else band.splice(oi + 1, 0, id);                      /* same → adjacent */
+    }
+    save();
+    L.comparePending = false;
+    renderLog();
   }
 
   /* photo → small dataURL thumbnail */
@@ -593,27 +799,112 @@
     var img = new Image();
     img.onload = function () {
       var c = document.createElement("canvas");
-      var s = Math.min(img.width, img.height);
-      c.width = 240; c.height = 144;
+      c.width = 280; c.height = 168;
       var ctx = c.getContext("2d");
       var sw = img.width, sh = sw * 0.6;
       if (sh > img.height) { sh = img.height; sw = sh / 0.6; }
-      ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, 240, 144);
+      ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, 280, 168);
       cb(c.toDataURL("image/jpeg", 0.78));
       URL.revokeObjectURL(img.src);
     };
+    img.onerror = function () { cb(null); };
     img.src = URL.createObjectURL(file);
   }
 
-  /* ================= DETAIL ================= */
+  /* ================================================================ SAVED */
 
-  var detailName = null;
+  function renderSaved() {
+    var el = $("screen-saved");
+    var queued = S.saved.filter(function (s) { return s.status === "queued"; });
+    var cooked = S.saved.filter(function (s) { return s.status === "cooked"; });
 
-  function openDetail(name) {
-    var x = findDish(name);
-    if (!x) return;
-    detailName = name;
-    renderDetail(x);
+    var html = '<div class="shead"><h2>Saved to try</h2><span class="sub">' + queued.length + " waiting</span></div>" +
+      '<div class="pagepad" style="display:flex;gap:8px;padding-bottom:8px">' +
+      '<input class="field" id="saved-draft" placeholder="Meal name or recipe link" value="' + esc(st.savedDraft) + '" style="flex:1" enterkeyhint="done">' +
+      '<button class="btn btn-secondary" id="saved-add"' + (st.savedDraft.trim() ? "" : " disabled") + ">Save</button></div>";
+
+    if (!queued.length && !cooked.length) {
+      html += '<div class="empty"><span class="brand">nothing saved yet</span>' +
+        "<p>Paste a link or name any dish you want to try. Tonight&rsquo;s &ldquo;something new&rdquo; comes from here.</p></div>";
+    } else {
+      html += '<div class="plainlist">' + queued.map(function (s) {
+        return '<div class="prow"><span><span class="pn">' + esc(s.title) + '</span><div class="pm">' +
+          esc(s.from || s.url || "saved by you") + '</div></span><span class="pa">' +
+          '<button class="btn btn-primary btn-sm" data-cooksaved="' + s.id + '">Cooked it</button>' +
+          '<button class="btn btn-quiet btn-sm" data-dropsaved="' + s.id + '" aria-label="Remove ' + esc(s.title) + '">✕</button></span></div>';
+      }).join("") + "</div>";
+      if (cooked.length) {
+        html += '<div class="shead"><h2>Already tried</h2></div><div class="plainlist">' +
+          cooked.map(function (s) {
+            return '<div class="prow"><span class="pn" style="color:var(--muted)">' + esc(s.title) + '</span><span class="pm">moved into your rotation</span></div>';
+          }).join("") + "</div>";
+      }
+    }
+    el.innerHTML = html;
+  }
+
+  /* ================================================================ HOUSEHOLD */
+
+  function renderHousehold() {
+    var el = $("screen-household");
+    if (!S.household) { el.innerHTML = '<div class="empty"><p>Finish setup on the Tonight tab first.</p></div>'; return; }
+
+    var agree = orderedIds().filter(function (id) { return everyoneOK(id) && tierOf(id) !== "no"; });
+
+    el.innerHTML = '<div class="pagepad" style="padding-top:24px">' +
+      '<span class="brand" style="font-size:34px">' + esc(S.household.name) + "</span>" +
+      '<div style="font-size:13px;color:var(--muted);margin-bottom:24px">' +
+        S.meals.length + " meals · " + S.events.length + " cooks logged · data lives on this device</div>" +
+
+      "<h3 style='font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 8px'>Members</h3>" +
+      S.household.members.map(function (m, i) {
+        return '<div class="hh-member"><span class="avatar">' + esc(m.slice(0, 2).toUpperCase()) + "</span>" +
+          '<span class="mn">' + esc(m) + "</span>" +
+          (i > 0 ? '<button class="btn btn-quiet btn-sm" data-delmember="' + i + '" aria-label="Remove ' + esc(m) + '">✕</button>' : "") +
+          "</div>";
+      }).join("") +
+      '<div style="display:flex;gap:8px;margin:12px 0 24px">' +
+        '<input class="field" id="hh-member" placeholder="Add a person" style="flex:1">' +
+        '<button class="btn btn-secondary" id="hh-member-add">Add</button></div>' +
+
+      '<button class="btn btn-primary btn-block" id="hh-invite">Invite someone — share a link</button>' +
+      '<div style="font-size:12px;color:var(--muted);margin:8px 0 24px">They&rsquo;ll get a link that sets this household name up on their device. Shared syncing is on the roadmap — today each device keeps its own log.</div>' +
+
+      "<h3 style='font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 8px'>What everyone will eat</h3>" +
+      (agree.length
+        ? agree.slice(0, 6).map(function (id) { return mealRow(id); }).join("")
+        : '<p style="font-size:13px;color:var(--muted)">Log who ate each meal and their reactions — meals the whole household accepts will collect here.</p>') +
+
+      '<div style="text-align:center;padding:24px 0">' +
+        '<button class="btn btn-quiet btn-sm" id="share-list">Share your ranked list</button> ' +
+        '<button class="btn btn-quiet btn-sm" id="reset-data">Start over</button></div>' +
+      "</div>";
+  }
+
+  function inviteLink() {
+    return location.origin + location.pathname + "?join=" + encodeURIComponent(S.household.name);
+  }
+
+  function shareText(title, text, url) {
+    if (navigator.share) {
+      navigator.share({ title: title, text: text, url: url }).catch(function () {});
+      return true;
+    }
+    try {
+      navigator.clipboard.writeText(url ? text + " " + url : text);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  /* ================================================================ DETAIL */
+
+  var detailId = null;
+
+  function openDetail(id) {
+    var m = mealById(id);
+    if (!m) return;
+    detailId = id;
+    renderDetail(m);
     var el = $("detail");
     el.hidden = false;
     requestAnimationFrame(function () { el.classList.add("on"); });
@@ -622,126 +913,72 @@
   }
 
   function closeDetail() {
+    var noteEl = $("detail-mods");
+    if (noteEl && detailId) { var m = mealById(detailId); if (m) { m.mods = noteEl.value; save(); } }
     var el = $("detail");
     el.classList.remove("on");
-    detailName = null;
+    detailId = null;
     setTimeout(function () { el.hidden = true; }, 200);
   }
 
-  function renderDetail(x) {
-    var idx = rotation.indexOf(x) + 1;
-    var hh = x.hh || [];
+  function renderDetail(m) {
+    var id = m.id;
+    var last = lastEvent(id);
+    var reactions = last ? last.reactions : {};
     $("detail-in").innerHTML =
       '<div class="detail-bar">' +
         '<button class="btn btn-quiet btn-sm" id="detail-back">&larr; Back</button>' +
-        '<button class="btn btn-quiet btn-sm" id="detail-close" aria-label="Close">✕</button>' +
+        labelHtml(id) +
       "</div>" +
-      tile(x, "lg") +
-      "<h1>" + esc(x.name) + "</h1>" +
-      '<div class="dsub">' + esc(x.src) + (x.cuisine ? " · " + esc(x.cuisine) : "") + " · " + x.occ + "</div>" +
+      tile(m, "lg") +
+      "<h1>" + esc(m.name) + "</h1>" +
+      '<div class="dsub">' +
+        (m.url ? '<a href="' + esc(m.url) + '" target="_blank" rel="noopener">Recipe source</a> · ' : "") +
+        (m.timeMins ? m.timeMins + " min · " : "") + (m.effort ? m.effort : "effort not set") +
+      "</div>" +
 
       '<div class="dstats">' +
-        '<div class="card dstat"><div class="k">#' + idx + '</div><div class="l">your rank</div></div>' +
-        '<div class="card dstat"><div class="k">' + (x.reps || 1) + '×</div><div class="l">times cooked</div></div>' +
-        '<div class="card dstat"><div class="k">' + fmt(scoreOf(x)) + '</div><div class="l">score</div></div>' +
+        '<div class="card dstat"><div class="k">#' + rankOf(id) + '</div><div class="l">rank</div></div>' +
+        '<div class="card dstat"><div class="k">' + repsOf(id) + '×</div><div class="l">cooked</div></div>' +
+        '<div class="card dstat"><div class="k">' + esc(ago(lastTsOf(id)).replace(" ago", "")) + '</div><div class="l">last made</div></div>' +
       "</div>" +
 
-      '<div class="dsection"><h3>Household</h3><div class="hhrow">' +
-        HOUSEHOLD.map(function (m) {
-          var on = hh.indexOf(m) >= 0;
-          return '<button class="hhbtn" data-hhtoggle="' + m + '" aria-pressed="' + on + '">' +
-            m + (on ? " · would eat again" : "") + "</button>";
-        }).join("") +
-      "</div></div>" +
+      '<div class="dsection"><h3>Last reactions</h3>' +
+        (last && Object.keys(reactions).length
+          ? Object.keys(reactions).map(function (mem) {
+              var r = reactions[mem];
+              var cls = r === "loved" ? "label-repeat" : (r === "never" ? "label-retired" : "label-mixed");
+              var txt = r === "loved" ? "Loved it" : (r === "never" ? "Not again" : "Fine");
+              return '<span class="label ' + cls + '" style="margin-right:6px">' + esc(mem) + " · " + txt + "</span>";
+            }).join("")
+          : '<p style="font-size:13px;color:var(--muted);margin:0">No reactions recorded yet — they&rsquo;re asked right after you log a cook.</p>') +
+      "</div>" +
 
       '<div class="dsection"><h3>Your modifications</h3>' +
-        '<textarea class="field" id="detail-mods" placeholder="e.g. half the butter, double the garlic">' + esc(x.mods || "") + "</textarea>" +
+        '<textarea class="field" id="detail-mods" placeholder="e.g. used less sugar, doubled the sauce">' + esc(m.mods || "") + "</textarea>" +
       "</div>" +
 
       '<div class="dsection"><h3>Cooking history</h3><ul class="hist">' +
-        (x.hist || []).slice(0, 6).map(function (ts) {
-          return "<li><b>" + dateShort(ts) + "</b><span>" + x.occ + "</span></li>";
+        eventsOf(id).slice(0, 8).map(function (e) {
+          return "<li><b>" + dateShort(e.ts) + "</b><span>" + esc((e.ate || []).join(", ") || "—") + "</span></li>";
         }).join("") +
       "</ul></div>" +
 
       '<div class="dactions">' +
-        '<button class="btn btn-primary btn-block" id="detail-cook">Cook again</button>' +
-        '<button class="btn btn-secondary btn-block" id="detail-ingr">Add ingredients</button>' +
+        '<button class="btn btn-primary btn-block" id="detail-cook">Cooked it again</button>' +
       "</div>";
   }
 
-  /* ================= PROFILE ================= */
-
-  function renderProfile() {
-    var el = $("screen-profile");
-    var sk = streakWeeks();
-    var dishes = rotation.length;
-    var cooks = totalCooks();
-    var repeaters = rotation.filter(function (x) { return (x.reps || 1) > 1; }).length;
-    var repeatRate = dishes ? Math.round(100 * repeaters / dishes) : 0;
-
-    var most = rotation.slice().sort(function (a, b) { return (b.reps || 1) - (a.reps || 1); })[0];
-    var top3 = rotation.slice(0, 3);
-
-    var cui = {};
-    rotation.forEach(function (x) { if (x.cuisine) cui[x.cuisine] = (cui[x.cuisine] || 0) + (x.reps || 1); });
-    var topCuisines = Object.keys(cui).sort(function (a, b) { return cui[b] - cui[a]; }).slice(0, 3);
-
-    var yearStart = new Date(new Date().getFullYear(), 0, 1).getTime();
-    var thisYear = cookLog.filter(function (ts) { return ts >= yearStart; }).length;
-
-    el.innerHTML = '<div class="profile">' +
-      '<span class="brand pbrand">again</span>' +
-      '<div class="psub">Your year in cooking, so far</div>' +
-
-      '<div class="pgrid">' +
-        '<div class="card pstat hero"><div><div class="k">' + sk + ' <span class="u">weeks</span></div>' +
-        '<div class="l">cooking streak — one cook a week keeps it</div></div></div>' +
-        '<div class="card pstat"><div class="k">' + cooks + '</div><div class="l">cooks logged</div></div>' +
-        '<div class="card pstat"><div class="k">' + dishes + '</div><div class="l">dishes ranked</div></div>' +
-        '<div class="card pstat"><div class="k">' + repeatRate + '%</div><div class="l">earn a repeat</div></div>' +
-        '<div class="card pstat"><div class="k">' + thisYear + '<span class="u"> / ' + GOAL.target + '</span></div><div class="l">' + GOAL.label.toLowerCase() + "</div></div>" +
-      "</div>" +
-
-      '<div class="shead" style="padding-left:0;padding-right:0"><h2>Top of your table</h2></div>' +
-      '<div class="plist">' + top3.map(function (x, i) {
-        return '<div class="pl-row"><b>' + (i + 1) + ". " + esc(x.name) + "</b><span>" + fmt(scoreOf(x)) + "</span></div>";
-      }).join("") + "</div>" +
-
-      '<div class="shead" style="padding-left:0;padding-right:0"><h2>Habits</h2></div>' +
-      '<div class="plist">' +
-        '<div class="pl-row"><b>Most repeated</b><span>' + (most ? esc(most.name) + " · " + (most.reps || 1) + "×" : "—") + "</span></div>" +
-        '<div class="pl-row"><b>Favorite cuisines</b><span>' + (topCuisines.length ? topCuisines.join(", ") : "—") + "</span></div>" +
-      "</div>" +
-
-      '<div class="shead" style="padding-left:0;padding-right:0"><h2>Taste compatibility</h2></div>' +
-      '<div class="matchgrid">' + FRIENDS.map(function (f) {
-        var m = matchPct(f);
-        return '<div class="card matchcard"><span class="avatar">' + f.init + "</span>" +
-          '<span class="nm">' + f.who + '</span><span class="pct">' + (m === null ? "—" : m + "%") + "</span>" +
-          '<span class="lbl">taste match</span></div>';
-      }).join("") + "</div>" +
-
-      (shopList.length
-        ? '<div class="shead" style="padding-left:0;padding-right:0"><h2>Shopping list</h2></div>' +
-          '<div class="plist">' + shopList.map(function (s, i) {
-            return '<div class="pl-row"><b>' + esc(s) + '</b><span><button class="btn btn-quiet btn-sm" data-droplist="' + i + '">✕</button></span></div>';
-          }).join("") + "</div>"
-        : "") +
-
-      '<div class="reset-row"><button id="reset-data">Restore demo data</button></div>' +
-    "</div>";
-  }
-
-  /* ================= CHROME ================= */
+  /* ================================================================ CHROME */
 
   function renderBar() {
     var sk = streakWeeks();
-    $("bar-meta").textContent =
-      (sk > 0 ? sk + "-wk streak · " : "") + rotation.length + " dishes · " + totalCooks() + " cooks";
+    $("bar-meta").textContent = S.household
+      ? (sk > 0 ? sk + "-wk streak · " : "") + S.meals.length + " meals"
+      : "";
   }
 
-  var TABS = ["home", "rankings", "log", "queue", "profile"];
+  var TABS = ["tonight", "rotation", "log", "saved", "household"];
 
   function setTab(t) {
     st.tab = t;
@@ -750,190 +987,320 @@
       if (b.classList.contains("logbtn")) return;
       b.setAttribute("aria-selected", String(b.dataset.tab === t));
     });
-    if (t === "home") renderHome();
-    if (t === "rankings") renderRankings();
-    if (t === "queue") renderQueue();
-    if (t === "log") renderLog();
-    if (t === "profile") renderProfile();
+    if (t === "tonight") renderTonight();
+    if (t === "rotation") renderRotation();
+    if (t === "log") { if (!st.log || st.log.step === "confirm") st.log = newLog(); renderLog(); }
+    if (t === "saved") renderSaved();
+    if (t === "household") renderHousehold();
     renderBar();
     window.scrollTo(0, 0);
   }
 
-  /* ================= EVENTS ================= */
+  /* ================================================================ EVENTS */
 
   document.addEventListener("click", function (e) {
     var t = e.target.closest("button, a");
     if (!t) return;
 
-    if (t.id === "top-brand") { e.preventDefault(); setTab("home"); return; }
+    /* --- nav --- */
+    if (t.id === "top-brand") { e.preventDefault(); setTab("tonight"); return; }
     if (t.dataset.tab) { setTab(t.dataset.tab); return; }
     if (t.dataset.tabGo) { setTab(t.dataset.tabGo); return; }
 
-    if (t.dataset.filter) { st.filter = t.dataset.filter; renderRankings(); return; }
-
-    if (t.dataset.detail) { openDetail(t.dataset.detail); return; }
-    if (t.id === "detail-back" || t.id === "detail-close") {
-      var x0 = detailName ? findDish(detailName) : null;
-      var modsEl = $("detail-mods");
-      if (x0 && modsEl) { x0.mods = modsEl.value; persist(); }
-      closeDetail();
-      if (st.tab === "rankings") renderRankings();
+    /* --- onboarding --- */
+    if (t.id === "onb-demo") { loadDemo(); return; }
+    if (t.id === "onb-member-add") {
+      var mi = $("onb-member");
+      if (mi && mi.value.trim()) { st.onb.members.push(mi.value.trim()); renderTonight(); }
       return;
     }
-    if (t.dataset.hhtoggle && detailName) {
-      var xd = findDish(detailName);
-      if (xd) {
-        var m = t.dataset.hhtoggle;
-        var pos = (xd.hh = xd.hh || []).indexOf(m);
-        if (pos >= 0) xd.hh.splice(pos, 1); else xd.hh.push(m);
-        persist(); renderDetail(xd);
+    if (t.dataset.onbMember !== undefined) {
+      var idx = parseInt(t.dataset.onbMember, 10);
+      if (idx > 0) { st.onb.members.splice(idx, 1); renderTonight(); }
+      return;
+    }
+    if (t.id === "onb-next1") {
+      var nameEl = $("onb-name");
+      st.onb.name = (nameEl && nameEl.value.trim()) || "Our household";
+      S.household = { name: st.onb.name, members: st.onb.members.slice() };
+      save();
+      st.onb.step = 2;
+      renderTonight();
+      return;
+    }
+    if (t.id === "onb-meal-add") {
+      var me = $("onb-meal");
+      if (me && me.value.trim()) { st.onb.mealNames.push(me.value.trim()); renderTonight(); }
+      return;
+    }
+    if (t.dataset.onbMealDel !== undefined) {
+      st.onb.mealNames.splice(parseInt(t.dataset.onbMealDel, 10), 1);
+      renderTonight(); return;
+    }
+    if (t.id === "onb-next2") {
+      st.onb.mealIds = st.onb.mealNames.slice(0, 12).map(function (n) {
+        var m = { id: uid(), name: n, url: "", thumb: null, timeMins: null, effort: null,
+          tags: [], createdAt: Date.now(), mods: "" };
+        S.meals.push(m);
+        S.events.push({ mealId: m.id, ts: Date.now() - 7 * DAY, ate: members().slice(), reactions: {}, note: "", again: "yes" });
+        return m.id;
+      });
+      /* everything starts in yes; ordering set by the duels */
+      S.order.yes = st.onb.mealIds.slice(0, 2);
+      st.onb.mealIds.slice(2).forEach(function (id) { if (S.order.yes.indexOf(id) < 0) S.order.yes.push(id); });
+      S.order.yes = st.onb.mealIds.slice();
+      save();
+      st.onb.step = 3; st.onb.duelN = 0;
+      renderTonight();
+      return;
+    }
+    if (t.id === "onb-finish") { finishOnboarding(); return; }
+
+    /* --- duels (onboarding + refine + placement share the buttons) --- */
+    if (t.dataset.duel) {
+      var res = t.dataset.duel;
+      if (st.onb && st.onb.step === 3) { onbDuel(res); return; }
+      if (st.duelCb) { st.duelCb(res); return; }
+      if (st.log && st.log.step === "confirm" && st.log.comparePending) { confirmDuel(res); return; }
+      return;
+    }
+
+    /* --- tonight --- */
+    if (t.dataset.cookrec) {
+      track("recommendation_selected", { mealId: t.dataset.cookrec });
+      st.log = newLog();
+      st.log.mealId = t.dataset.cookrec;
+      var lastE = lastEvent(t.dataset.cookrec);
+      if (lastE && lastE.ate && lastE.ate.length) st.log.ate = lastE.ate.slice();
+      st.log.step = "ctx";
+      setTab("log");
+      return;
+    }
+    if (t.dataset.cooksaved) {
+      var sv = S.saved.filter(function (s) { return s.id === t.dataset.cooksaved; })[0];
+      if (sv) {
+        track("recommendation_selected", { saved: sv.title });
+        var existing = mealByName(sv.title);
+        st.log = newLog({ name: sv.title, url: sv.url, savedId: sv.id });
+        if (existing) st.log.mealId = existing.id;
+        st.log.step = "ctx";
+        setTab("log");
       }
       return;
     }
-    if (t.id === "detail-cook" && detailName) {
-      var xc = findDish(detailName);
-      var modsEl2 = $("detail-mods");
-      if (xc && modsEl2) xc.mods = modsEl2.value;
-      closeDetail();
-      if (xc) startLogWith({ name: xc.name, src: xc.src, occ: xc.occ, tier: null, reps: 1,
-        cuisine: xc.cuisine, tags: (xc.tags || []).slice(), hh: (xc.hh || []).slice(),
-        mods: xc.mods, thumb: xc.thumb, lastTs: Date.now(), hist: [] });
+    if (t.dataset.fb) {
+      var parts = t.dataset.fb.split(":");
+      S.fb.shown[parts[0]] = true;
+      S.fb.answers[parts[0]] = parts[1];
+      track("feedback_answered", { q: parts[0], a: parts[1] });
+      save();
+      toast("Thanks — noted");
+      renderTonight();
       return;
     }
-    if (t.id === "detail-ingr" && detailName) {
-      if (shopList.indexOf(detailName) < 0) { shopList.unshift(detailName); persist(); }
-      toast("Ingredients saved to your list");
+
+    /* --- rotation --- */
+    if (t.dataset.view) { st.view = t.dataset.view; renderRotation(); return; }
+    if (t.id === "refine-btn") { startRefine(); return; }
+
+    /* --- log --- */
+    if (t.dataset.loghit) {
+      st.log.mealId = t.dataset.loghit;
+      var le = lastEvent(t.dataset.loghit);
+      if (le && le.ate && le.ate.length) st.log.ate = le.ate.slice();
+      st.log.step = "ctx";
+      renderLog();
       return;
     }
-    if (t.dataset.droplist !== undefined) {
-      shopList.splice(parseInt(t.dataset.droplist, 10), 1);
-      persist(); renderProfile(); return;
+    if (t.dataset.lognew) {
+      st.log.name = st.log.q.trim();
+      st.log.step = "ctx";
+      renderLog();
+      return;
     }
-
-    if (t.dataset.occ) { st.log.occ = t.dataset.occ; syncFormState(); renderLog(); return; }
-    if (t.dataset.tag) {
-      var tg = t.dataset.tag, ti = st.log.tags.indexOf(tg);
-      if (ti >= 0) st.log.tags.splice(ti, 1); else st.log.tags.push(tg);
-      syncFormState(); renderLog(); return;
+    if (t.dataset.ate) {
+      var a = t.dataset.ate, ai = st.log.ate.indexOf(a);
+      if (ai >= 0) st.log.ate.splice(ai, 1); else st.log.ate.push(a);
+      syncLogFields(); renderLog(); return;
     }
-    if (t.dataset.hh) {
-      var hm = t.dataset.hh, hi = st.log.hh.indexOf(hm);
-      if (hi >= 0) st.log.hh.splice(hi, 1); else st.log.hh.push(hm);
-      syncFormState(); renderLog(); return;
-    }
-
+    if (t.dataset.again) { st.log.again = t.dataset.again; syncLogFields(); renderLog(); return; }
+    if (t.dataset.time) { st.log.timeMins = parseInt(t.dataset.time, 10); syncLogFields(); renderLog(); keepDetailsOpen(); return; }
+    if (t.dataset.effort) { st.log.effort = t.dataset.effort; syncLogFields(); renderLog(); keepDetailsOpen(); return; }
     if (t.id === "photo-pick") { $("photo-file").click(); return; }
+    if (t.id === "log-save") { syncLogFields(); if (st.log.again) saveLogEvent(); return; }
+    if (t.id === "log-cancel") { st.log = newLog(); renderLog(); return; }
+    if (t.dataset.react) {
+      var rp = t.dataset.react.split(":");
+      st.log.reactions[rp[0]] = st.log.reactions[rp[0]] === rp[1] ? undefined : rp[1];
+      if (!st.log.reactions[rp[0]]) delete st.log.reactions[rp[0]];
+      applyConfirmReactions();
+      renderLog();
+      return;
+    }
+    if (t.id === "log-done") {
+      applyConfirmReactions();
+      st.log = newLog();
+      setTab("tonight");
+      return;
+    }
 
-    if (t.dataset.want !== undefined) {
-      var w = wantList[parseInt(t.dataset.want, 10)];
-      if (w) startLogWith({ name: w.name, src: w.src, occ: w.occ, tier: null, reps: 1,
-        cuisine: "", tags: [], hh: ["You"], mods: "", thumb: null, lastTs: Date.now(), hist: [] });
+    /* --- saved --- */
+    if (t.id === "saved-add") {
+      var sd = st.savedDraft.trim();
+      if (!sd) return;
+      var isUrl = /^(https?:\/\/|www\.)/i.test(sd);
+      S.saved.unshift({ id: uid(), title: isUrl ? hostOf(sd) + " recipe" : sd,
+        url: isUrl ? sd : "", from: isUrl ? hostOf(sd) : "you", status: "queued" });
+      st.savedDraft = "";
+      save();
+      track("saved_recipe_added", {});
+      renderSaved();
+      toast("Saved — it'll show up under Something new");
       return;
     }
-    if (t.dataset.cookwant !== undefined) {
-      var cw = wantList[parseInt(t.dataset.cookwant, 10)];
-      if (cw) startLogWith({ name: cw.name, src: cw.src, occ: cw.occ, tier: null, reps: 1,
-        cuisine: "", tags: [], hh: ["You"], mods: "", thumb: null, lastTs: Date.now(), hist: [] });
-      return;
+    if (t.dataset.dropsaved) {
+      S.saved = S.saved.filter(function (s) { return s.id !== t.dataset.dropsaved; });
+      save(); renderSaved(); return;
     }
-    if (t.dataset.dropwant !== undefined) {
-      wantList.splice(parseInt(t.dataset.dropwant, 10), 1);
-      persist(); renderQueue(); return;
-    }
-    if (t.id === "want-add") {
-      var wv = st.wantDraft.trim(); if (!wv) return;
-      wantList.unshift({ name: wv, src: "Saved by you", occ: "weeknight", from: "you" });
-      st.wantDraft = "";
-      persist(); renderQueue(); toast("Saved to your queue"); return;
-    }
-    if (t.dataset.savefeed) {
-      var parts = t.dataset.savefeed.split(":");
-      var fr = FRIENDS.filter(function (f) { return f.who === parts[0]; })[0];
-      var it = fr && fr.feed[+parts[1]];
-      if (it && !wantList.some(function (q) { return q.name.toLowerCase() === it.dish.toLowerCase(); })) {
-        wantList.unshift({ name: it.dish, src: it.src, occ: it.occ, from: fr.who });
-        persist(); toast("Saved to your queue");
+
+    /* --- household --- */
+    if (t.id === "hh-member-add") {
+      var he = $("hh-member");
+      if (he && he.value.trim()) {
+        S.household.members.push(he.value.trim());
+        save(); renderHousehold();
       }
-      renderHome(); return;
+      return;
     }
-
-    if (t.id === "go-tier") {
-      syncFormState();
-      if (!st.log.draft.trim()) return;
-      st.log.dish = buildDishFromForm();
-      st.log.step = "tier"; renderLog(); return;
+    if (t.dataset.delmember !== undefined) {
+      S.household.members.splice(parseInt(t.dataset.delmember, 10), 1);
+      save(); renderHousehold(); return;
     }
-    if (t.dataset.tier) {
-      st.log.tier = t.dataset.tier; st.log.dish.tier = t.dataset.tier; beginCompare(); return;
+    if (t.id === "hh-invite") {
+      var ok = shareText("Join " + S.household.name + " on again",
+        "Track what our household actually likes to eat:", inviteLink());
+      track("household_invite_sent", {});
+      toast(ok ? (navigator.share ? "Share sheet opened" : "Invite link copied") : "Copy failed — link: " + inviteLink());
+      return;
     }
-    if (t.dataset.win) { stepCompare(t.dataset.win === "new"); return; }
-    if (t.dataset.same) { sameCompare(); return; }
-    if (t.dataset.skip) { skipCompare(); return; }
-    if (t.id === "see-rank") { st.log = newLog(); setTab("rankings"); return; }
-    if (t.id === "log-another") { st.log = newLog(); st.fresh = null; renderLog(); return; }
-
+    if (t.id === "share-list") {
+      var lines = orderedIds().slice(0, 10).map(function (id, i) {
+        return (i + 1) + ". " + mealById(id).name + " (" + repsOf(id) + "× cooked)";
+      });
+      var ok2 = shareText("Our dinner rotation", S.household.name + "'s rotation:\n" + lines.join("\n"), "");
+      toast(ok2 ? (navigator.share ? "Share sheet opened" : "List copied to clipboard") : "Could not share");
+      return;
+    }
     if (t.id === "reset-data") {
-      rotation = SEED.map(function (x) { return Object.assign({}, x); });
-      wantList = SEED_WANT.map(function (x) { return Object.assign({}, x); });
-      cookLog = seedCookLog();
-      shopList = [];
-      st.fresh = null;
-      persist(); renderProfile(); renderBar(); toast("Demo data restored");
+      localStorage.removeItem(KEY);
+      S = blankStore();
+      st.onb = null; st.log = newLog(); st.fresh = null;
+      setTab("tonight");
+      toast("Fresh start");
+      return;
+    }
+
+    /* --- detail --- */
+    if (t.dataset.detail) { openDetail(t.dataset.detail); return; }
+    if (t.id === "detail-back") {
+      closeDetail();
+      if (st.tab === "rotation") renderRotation();
+      if (st.tab === "tonight") renderTonight();
+      if (st.tab === "household") renderHousehold();
+      return;
+    }
+    if (t.id === "detail-cook") {
+      var did = detailId;
+      closeDetail();
+      if (did) {
+        st.log = newLog();
+        st.log.mealId = did;
+        var lev = lastEvent(did);
+        if (lev && lev.ate && lev.ate.length) st.log.ate = lev.ate.slice();
+        st.log.step = "ctx";
+        setTab("log");
+      }
       return;
     }
   });
 
-  function syncFormState() {
-    var dr = $("draft"), ur = $("url"), mo = $("mods");
-    if (dr) st.log.draft = dr.value;
-    if (ur) st.log.url = ur.value;
-    if (mo) st.log.mods = mo.value;
+  function keepDetailsOpen() {
+    var det = document.querySelector("details.moredetails");
+    if (det) det.open = true;
+  }
+
+  function syncLogFields() {
+    if (!st.log) return;
+    var u = $("log-url"), n = $("log-note"), q = $("log-q");
+    if (u) st.log.url = u.value;
+    if (n) st.log.note = n.value;
+    if (q) st.log.q = q.value;
+  }
+
+  function hostOf(u) {
+    try { return new URL(u.indexOf("http") === 0 ? u : "https://" + u).hostname.replace(/^www\./, ""); }
+    catch (e) { return "link"; }
   }
 
   document.addEventListener("input", function (e) {
-    if (e.target.id === "draft") {
-      st.log.draft = e.target.value;
-      var b = $("go-tier"); if (b) b.disabled = !e.target.value.trim();
-    }
-    if (e.target.id === "url") st.log.url = e.target.value;
-    if (e.target.id === "mods") st.log.mods = e.target.value;
-    if (e.target.id === "want-draft") {
-      st.wantDraft = e.target.value;
-      var wb = $("want-add"); if (wb) wb.disabled = !e.target.value.trim();
+    if (e.target.id === "onb-name" && st.onb) st.onb.name = e.target.value;
+    if (e.target.id === "log-q") { st.log.q = e.target.value; renderLog(); }
+    if (e.target.id === "log-url") st.log.url = e.target.value;
+    if (e.target.id === "log-note") st.log.note = e.target.value;
+    if (e.target.id === "saved-draft") {
+      st.savedDraft = e.target.value;
+      var sb = $("saved-add"); if (sb) sb.disabled = !e.target.value.trim();
     }
   });
 
   document.addEventListener("change", function (e) {
     if (e.target.id === "photo-file" && e.target.files && e.target.files[0]) {
-      syncFormState();
+      syncLogFields();
       fileToThumb(e.target.files[0], function (url) {
-        st.log.thumb = url;
+        if (url) st.log.thumb = url;
         renderLog();
+        keepDetailsOpen();
       });
     }
   });
 
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape" && detailName) { closeDetail(); return; }
+    if (e.key === "Escape" && detailId) { closeDetail(); return; }
     if (e.key !== "Enter") return;
-    if (e.target.id === "draft" && e.target.value.trim()) {
-      syncFormState();
-      st.log.dish = buildDishFromForm();
-      st.log.step = "tier"; renderLog();
+    var id = e.target.id;
+    if (id === "log-q" && st.log && st.log.q.trim()) {
+      var hit = mealByName(st.log.q);
+      if (hit) {
+        st.log.mealId = hit.id;
+        var le2 = lastEvent(hit.id);
+        if (le2 && le2.ate && le2.ate.length) st.log.ate = le2.ate.slice();
+      } else {
+        st.log.name = st.log.q.trim();
+      }
+      st.log.step = "ctx";
+      renderLog();
     }
-    if (e.target.id === "want-draft" && e.target.value.trim()) {
-      wantList.unshift({ name: e.target.value.trim(), src: "Saved by you", occ: "weeknight", from: "you" });
-      st.wantDraft = "";
-      persist(); renderQueue(); toast("Saved to your queue");
-    }
+    if (id === "onb-member") { var b1 = $("onb-member-add"); if (b1) b1.click(); }
+    if (id === "onb-meal") { var b2 = $("onb-meal-add"); if (b2) b2.click(); }
+    if (id === "hh-member") { var b3 = $("hh-member-add"); if (b3) b3.click(); }
+    if (id === "saved-draft") { var b4 = $("saved-add"); if (b4) b4.click(); }
   });
 
-  /* ================= BOOT ================= */
+  /* ================================================================ BOOT */
 
-  renderBar();
-  renderHome();
+  (function boot() {
+    var join = new URLSearchParams(location.search).get("join");
+    if (join && S.household) {
+      track("household_invite_accepted", { existing: true });
+      toast("Invite noted — this device already has a household");
+      if (history.replaceState) history.replaceState(null, "", location.pathname);
+    }
+    st.log = newLog();
+    renderBar();
+    renderTonight();
 
-  if ("serviceWorker" in navigator && location.protocol === "https:") {
-    navigator.serviceWorker.register("sw.js").catch(function () {});
-  }
+    if ("serviceWorker" in navigator && location.protocol === "https:") {
+      navigator.serviceWorker.register("sw.js").catch(function () {});
+    }
+  })();
 })();
