@@ -5,15 +5,11 @@
 
 ## 1. Public URL
 
-**Not deployed — external blocker.** The machine has no authenticated Vercel session (the CLI printed a device-auth prompt that was never completed; there is no token in `~/.vercel`). Signing in requires your account and cannot be done for you.
+**Live: https://again-app.higgsfield.app**
 
-The project is fully deployment-ready as a static site. To deploy:
+Deployed via the connected Higgsfield website service (site id `476d7d75-32b6-44ab-9652-9e4d1caca41b`): the static app is served raw from a root server route in their React scaffold, with assets under `app/public/`. Verified live: onboarding renders, demo data loads, localStorage persists, service worker registers (offline + install now active). To redeploy after changes: copy updated files into the site repo, push, and call the connector's deploy.
 
-```bash
-cd "/Users/jeheonlee/Documents/Claude Code/again" && npx vercel login && npx vercel --prod --yes
-```
-
-(First command opens browser auth; second deploys and prints the public URL. No build step — it's a static directory.)
+Vercel remains available as an alternative host if you prefer it (`npx vercel login` then `npx vercel --prod --yes` from this folder) — no longer required.
 
 ## 2. What works
 
