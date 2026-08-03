@@ -1299,6 +1299,24 @@
     renderBar();
     renderTonight();
 
+
+  /* ---- anonymous visit beacon: path, referrer host, opaque random id. No IP/UA stored. ---- */
+  (function () {
+    if (location.protocol !== "https:") return;
+    try {
+      var vid = localStorage.getItem("again.vid");
+      if (!vid) { vid = crypto.randomUUID(); localStorage.setItem("again.vid", vid); }
+      var ref = "";
+      try { ref = document.referrer ? new URL(document.referrer).hostname : ""; } catch (e) {}
+      fetch("/api/hit", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ p: location.pathname, r: ref, v: vid }),
+        keepalive: true
+      }).catch(function () {});
+    } catch (e) {}
+  })();
+
     if ("serviceWorker" in navigator && location.protocol === "https:") {
       navigator.serviceWorker.register("sw.js").catch(function () {});
     }
