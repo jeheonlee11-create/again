@@ -273,13 +273,15 @@ import * as core from "./core.js";
         "<h2>" + (o.joined ? "You&rsquo;ve been invited to " + esc(o.name) : "Who eats with you?") + "</h2>" +
         '<p class="lede">Name the household and list who&rsquo;s usually at the table.</p>' +
         '<div class="fgroup"><label for="onb-name">Household name</label>' +
-        '<input class="field" id="onb-name" placeholder="e.g. The Lees, Apartment 4B" value="' + esc(o.name) + '"></div>' +
+        '<input class="field" id="onb-name" maxlength="80" placeholder="e.g. The Lees, Apartment 4B" value="' + esc(o.name) + '"></div>' +
         '<div class="fgroup"><label>People</label><div class="chiprow">' +
         o.members.map(function (m, i) {
-          return '<button class="chip" aria-pressed="true" data-onb-member="' + i + '">' + esc(m) + (i > 0 ? " ✕" : "") + "</button>";
+          return i > 0
+            ? '<button class="chip" data-onb-member="' + i + '" aria-label="Remove ' + esc(m) + '">' + esc(m) + " ✕</button>"
+            : '<span class="chip">' + esc(m) + "</span>";
         }).join("") + "</div>" +
         '<div style="display:flex;gap:8px;margin-top:8px">' +
-        '<input class="field" id="onb-member" placeholder="Add a person" style="flex:1">' +
+        '<input class="field" id="onb-member" aria-label="Add a person" maxlength="40" placeholder="Add a person" style="flex:1">' +
         '<button class="btn btn-secondary" id="onb-member-add">Add</button></div></div>' +
         '<button class="btn btn-primary btn-block" id="onb-next1">Continue</button>' +
         '<div style="height:8px"></div>' +
@@ -292,10 +294,10 @@ import * as core from "./core.js";
         '<div class="steps">Step 2 of 3 — your current rotation</div>' +
         "<h2>Add three meals you already make</h2>" +
         '<p class="lede">Whatever&rsquo;s actually in the rotation — not aspirations.</p>' +
-        '<div style="display:flex;gap:8px"><input class="field" id="onb-meal" placeholder="e.g. sheet-pan chicken" style="flex:1">' +
+        '<div style="display:flex;gap:8px"><input class="field" id="onb-meal" aria-label="Meal name" maxlength="120" placeholder="e.g. sheet-pan chicken" style="flex:1">' +
         '<button class="btn btn-secondary" id="onb-meal-add">Add</button></div>' +
         '<div class="addedlist">' + o.mealNames.map(function (n, i) {
-          return '<div class="ai"><span>' + esc(n) + '</span><button class="btn btn-quiet btn-sm" data-onb-meal-del="' + i + '">✕</button></div>';
+          return '<div class="ai"><span>' + esc(n) + '</span><button class="btn btn-quiet btn-sm" data-onb-meal-del="' + i + '" aria-label="Remove ' + esc(n) + '">✕</button></div>';
         }).join("") + "</div>" +
         '<button class="btn btn-primary btn-block" id="onb-next2"' + (o.mealNames.length >= 3 ? "" : " disabled") + ">" +
         (o.mealNames.length >= 3 ? "Rank them" : "Add " + (3 - o.mealNames.length) + " more") + "</button></div>";
@@ -499,26 +501,12 @@ import * as core from "./core.js";
 
     if (L.step === "search") {
       L.ate = members().slice();   /* household may have changed since this log draft was made */
-      var q = L.q.trim().toLowerCase();
-      var hits = S.meals.filter(function (m) {
-        return !q || m.name.toLowerCase().indexOf(q) >= 0;
-      }).sort(function (a, b) { return (lastTsOf(b.id) || 0) - (lastTsOf(a.id) || 0); }).slice(0, 5);
-
       html = '<div class="flow">' +
         '<div class="step">Log a meal</div>' +
         "<h2>What did you cook?</h2>" +
         '<p class="lede">Pick a meal you&rsquo;ve made before, or type a new one.</p>' +
-        '<input class="field" id="log-q" placeholder="Search or add a meal" value="' + esc(L.q) + '" autocomplete="off" enterkeyhint="go">' +
-        '<div class="hitlist">' +
-        hits.map(function (m) {
-          return '<button class="hit" data-loghit="' + m.id + '">' + tile(m, "sm") +
-            "<span><span class=\"hn\">" + esc(m.name) + '</span><div class="hm">' + repsOf(m.id) + "× · " + ago(lastTsOf(m.id)) + '</div></span><span class="htag">Cooked again</span></button>';
-        }).join("") +
-        (q && !mealByName(L.q)
-          ? '<button class="hit" data-lognew="1"><span class="tile tile-sm">+</span>' +
-            "<span><span class=\"hn\">Add &ldquo;" + esc(L.q.trim()) + "&rdquo;</span><div class=\"hm\">New meal</div></span><span class=\"htag\">Add</span></button>"
-          : "") +
-        "</div></div>";
+        '<input class="field" id="log-q" aria-label="Search or add a meal" maxlength="120" placeholder="Search or add a meal" value="' + esc(L.q) + '" autocomplete="off" enterkeyhint="go" aria-controls="log-hits">' +
+        '<div class="hitlist" id="log-hits" aria-live="polite">' + logHitsHtml(L) + "</div></div>";
     }
 
     if (L.step === "ctx") {
@@ -543,8 +531,8 @@ import * as core from "./core.js";
           '<div class="fgroup"><button class="photobtn" id="photo-pick" type="button">' +
           (core.safeImageSrc(L.thumb) ? '<img src="' + esc(L.thumb) + '" alt="">Photo added — tap to replace' : "Add a photo (optional)") +
           '</button><input type="file" id="photo-file" accept="image/*" hidden></div>' +
-          '<div class="fgroup"><input class="field" id="log-url" inputmode="url" placeholder="Recipe link (optional)" value="' + esc(L.url) + '"></div>' +
-          '<div class="fgroup"><input class="field" id="log-note" placeholder="Modification note — e.g. used less sugar" value="' + esc(L.note) + '"></div>' +
+          '<div class="fgroup"><input class="field" id="log-url" inputmode="url" aria-label="Recipe link" placeholder="Recipe link (optional)" value="' + esc(L.url) + '"></div>' +
+          '<div class="fgroup"><input class="field" id="log-note" aria-label="Modification note" placeholder="Modification note — e.g. used less sugar" value="' + esc(L.note) + '"></div>' +
           '<div class="fgroup"><label>Cooking time</label><div class="chiprow">' +
             [15, 25, 40, 60].map(function (t) {
               return '<button class="chip" data-time="' + t + '" aria-pressed="' + (L.timeMins === t) + '">' + (t === 60 ? "60+ min" : t + " min") + "</button>";
@@ -592,6 +580,23 @@ import * as core from "./core.js";
 
     el.innerHTML = html;
     if (L.step === "search") { var qf = $("log-q"); if (qf) { qf.focus(); qf.setSelectionRange(qf.value.length, qf.value.length); } }
+  }
+
+  /* The search results only. Typing re-renders just this list, never the input itself, so
+     focus, the caret and IME composition (Korean, Japanese, Chinese input) are not disturbed. */
+  function logHitsHtml(L) {
+    var q = L.q.trim().toLowerCase();
+    var hits = S.meals.filter(function (m) {
+      return !q || m.name.toLowerCase().indexOf(q) >= 0;
+    }).sort(function (a, b) { return (lastTsOf(b.id) || 0) - (lastTsOf(a.id) || 0); }).slice(0, 5);
+    return hits.map(function (m) {
+        return '<button class="hit" data-loghit="' + m.id + '">' + tile(m, "sm") +
+          "<span><span class=\"hn\">" + esc(m.name) + '</span><div class="hm">' + repsOf(m.id) + "× · " + ago(lastTsOf(m.id)) + '</div></span><span class="htag">Cooked again</span></button>';
+      }).join("") +
+      (q && !mealByName(L.q)
+        ? '<button class="hit" data-lognew="1"><span class="tile tile-sm" aria-hidden="true">+</span>' +
+          "<span><span class=\"hn\">Add &ldquo;" + esc(L.q.trim()) + "&rdquo;</span><div class=\"hm\">New meal</div></span><span class=\"htag\">Add</span></button>"
+        : "");
   }
 
   function saveLogEvent() {
@@ -695,7 +700,7 @@ import * as core from "./core.js";
 
     var html = '<div class="shead"><h2>Saved to try</h2><span class="sub">' + queued.length + " waiting</span></div>" +
       '<div class="pagepad" style="display:flex;gap:8px;padding-bottom:8px">' +
-      '<input class="field" id="saved-draft" placeholder="Meal name or recipe link" value="' + esc(st.savedDraft) + '" style="flex:1" enterkeyhint="done">' +
+      '<input class="field" id="saved-draft" aria-label="Meal name or recipe link" placeholder="Meal name or recipe link" value="' + esc(st.savedDraft) + '" style="flex:1" enterkeyhint="done">' +
       '<button class="btn btn-secondary" id="saved-add"' + (st.savedDraft.trim() ? "" : " disabled") + ">Save</button></div>";
 
     if (!queued.length && !cooked.length) {
@@ -739,7 +744,7 @@ import * as core from "./core.js";
           "</div>";
       }).join("") +
       '<div style="display:flex;gap:8px;margin:12px 0 24px">' +
-        '<input class="field" id="hh-member" placeholder="Add a person" style="flex:1">' +
+        '<input class="field" id="hh-member" aria-label="Add a person" maxlength="40" placeholder="Add a person" style="flex:1">' +
         '<button class="btn btn-secondary" id="hh-member-add">Add</button></div>' +
 
       '<button class="btn btn-primary btn-block" id="hh-invite">Invite someone — share a link</button>' +
@@ -805,12 +810,14 @@ import * as core from "./core.js";
 
   /* ================================================================ DETAIL */
 
-  var detailId = null;
+  var detailId = null, detailOpener = null;
 
   function openDetail(id) {
     var m = mealById(id);
     if (!m) return;
     detailId = id;
+    detailOpener = document.activeElement;
+    setBackgroundInert(true);
     renderDetail(m);
     var el = $("detail");
     el.hidden = false;
@@ -819,13 +826,29 @@ import * as core from "./core.js";
     if (back) back.focus();
   }
 
+  /* while the detail dialog is open, keep focus and screen readers out of the page behind it */
+  function setBackgroundInert(on) {
+    document.querySelectorAll(".topnav, .appbar, .screens, .bottomnav").forEach(function (el) {
+      if (on) el.setAttribute("inert", ""); else el.removeAttribute("inert");
+    });
+  }
+
   function closeDetail() {
     var noteEl = $("detail-mods");
     if (noteEl && detailId) { var m = mealById(detailId); if (m) { m.mods = noteEl.value; save(); } }
     var el = $("detail");
     el.classList.remove("on");
+    var closedId = detailId;
     detailId = null;
-    setTimeout(function () { el.hidden = true; }, 200);
+    setBackgroundInert(false);
+    setTimeout(function () {
+      el.hidden = true;
+      /* return focus to what opened the dialog (re-found by id if the list was re-rendered) */
+      var back = detailOpener && document.contains(detailOpener) ? detailOpener
+        : document.querySelector('.screen:not([hidden]) [data-detail="' + closedId + '"]');
+      if (back) back.focus();
+      detailOpener = null;
+    }, 200);
   }
 
   function renderDetail(m) {
@@ -862,7 +885,7 @@ import * as core from "./core.js";
       "</div>" +
 
       '<div class="dsection"><h3>Your modifications</h3>' +
-        '<textarea class="field" id="detail-mods" placeholder="e.g. used less sugar, doubled the sauce">' + esc(m.mods || "") + "</textarea>" +
+        '<textarea class="field" id="detail-mods" aria-label="Your modifications" placeholder="e.g. used less sugar, doubled the sauce">' + esc(m.mods || "") + "</textarea>" +
       "</div>" +
 
       '<div class="dsection"><h3>Cooking history</h3><ul class="hist">' +
@@ -892,8 +915,8 @@ import * as core from "./core.js";
     refineIds = null;
     TABS.forEach(function (k) { $("screen-" + k).hidden = k !== t; });
     document.querySelectorAll("[data-tab]").forEach(function (b) {
-      if (b.classList.contains("logbtn")) return;
-      b.setAttribute("aria-selected", String(b.dataset.tab === t));
+      if (b.dataset.tab === t) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
     });
     if (t === "tonight") renderTonight();
     if (t === "rotation") renderRotation();
@@ -1162,7 +1185,11 @@ import * as core from "./core.js";
 
   document.addEventListener("input", function (e) {
     if (e.target.id === "onb-name" && st.onb) st.onb.name = e.target.value;
-    if (e.target.id === "log-q") { st.log.q = e.target.value; renderLog(); }
+    if (e.target.id === "log-q") {
+      st.log.q = e.target.value;
+      if (e.isComposing) return;            /* wait for compositionend */
+      var hl = $("log-hits"); if (hl) hl.innerHTML = logHitsHtml(st.log);
+    }
     if (e.target.id === "log-url") st.log.url = e.target.value;
     if (e.target.id === "log-note") st.log.note = e.target.value;
     if (e.target.id === "saved-draft") {
@@ -1183,9 +1210,16 @@ import * as core from "./core.js";
     }
   });
 
+  document.addEventListener("compositionend", function (e) {
+    if (e.target.id === "log-q" && st.log) {
+      st.log.q = e.target.value;
+      var hl = $("log-hits"); if (hl) hl.innerHTML = logHitsHtml(st.log);
+    }
+  });
+
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && detailId) { closeDetail(); return; }
-    if (e.key !== "Enter") return;
+    if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) return;   /* Enter that confirms an IME composition */
     var id = e.target.id;
     if (id === "log-q" && st.log && st.log.q.trim()) {
       var hit = mealByName(st.log.q);

@@ -26,14 +26,14 @@
   --teal:        #244F52;
   --teal-deep:   #1B3D40;
   --ink:         #1E2424;
-  --muted:       #747C7C;
+  --muted:       #636B6B;   /* 5.1:1 on --bg (WCAG AA) */
   --bg:          #F8F7F3;
   --card:        #FFFFFF;
   --border:      #E4E5E1;
   --selected:    #E6EFEF;
-  --positive:    #7C9A83;
+  --positive:    #4E7257;   /* 4.8:1 on --positive-soft */
   --positive-soft: #EDF2EE;
-  --danger:      #A05744;
+  --danger:      #97503E;
   --danger-soft: #F4E9E5;
 
   --font-brand: "Cormorant Garamond", "Playfair Display", Georgia, serif;
@@ -112,7 +112,7 @@ button { font-family: var(--font-ui); color: inherit; }
   padding: 6px 2px; border-bottom: 2px solid transparent; border-radius: 0;
   transition: color .15s;
 }
-.topnav button[aria-selected="true"] { color: var(--teal); border-bottom-color: var(--teal); }
+.topnav button[aria-current="page"] { color: var(--teal); border-bottom-color: var(--teal); }
 .topnav button:hover { color: var(--ink); }
 
 .appbar {
@@ -162,7 +162,7 @@ button { font-family: var(--font-ui); color: inherit; }
   transition: color .15s;
 }
 .bottomnav .navbtn svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.bottomnav .navbtn[aria-selected="true"] { color: var(--teal); }
+.bottomnav .navbtn[aria-current="page"] { color: var(--teal); }
 
 .bottomnav .logbtn {
   width: 52px; height: 52px; margin: 0 10px 8px;
@@ -498,11 +498,11 @@ details.moredetails > div { padding-top: var(--s2); }
 
   <nav class="topnav" aria-label="Primary">
     <a class="brand" href="#" id="top-brand">again</a>
-    <button data-tab="tonight" aria-selected="true">Tonight</button>
-    <button data-tab="rotation" aria-selected="false">Rotation</button>
-    <button data-tab="log" aria-selected="false">Log a meal</button>
-    <button data-tab="saved" aria-selected="false">Saved</button>
-    <button data-tab="household" aria-selected="false">Household</button>
+    <button data-tab="tonight" aria-current="page">Tonight</button>
+    <button data-tab="rotation">Rotation</button>
+    <button data-tab="log">Log a meal</button>
+    <button data-tab="saved">Saved</button>
+    <button data-tab="household">Household</button>
   </nav>
 
   <header class="appbar">
@@ -519,22 +519,22 @@ details.moredetails > div { padding-top: var(--s2); }
   </div>
 
   <nav class="bottomnav" aria-label="Primary">
-    <button class="navbtn" data-tab="tonight" aria-selected="true">
+    <button class="navbtn" data-tab="tonight" aria-current="page">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13.5A8.5 8.5 0 1 1 10.5 4a7 7 0 0 0 9.5 9.5z"/></svg>
       Tonight
     </button>
-    <button class="navbtn" data-tab="rotation" aria-selected="false">
+    <button class="navbtn" data-tab="rotation">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2.5 21 6.5l-4 4"/><path d="M3 11V9a2.5 2.5 0 0 1 2.5-2.5H21"/><path d="M7 21.5 3 17.5l4-4"/><path d="M21 13v2a2.5 2.5 0 0 1-2.5 2.5H3"/></svg>
       Rotation
     </button>
     <button class="logbtn" data-tab="log" aria-label="Log a meal">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
     </button>
-    <button class="navbtn" data-tab="saved" aria-selected="false">
+    <button class="navbtn" data-tab="saved">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v16l-6-4-6 4z"/></svg>
       Saved
     </button>
-    <button class="navbtn" data-tab="household" aria-selected="false">
+    <button class="navbtn" data-tab="household">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c.9-2.8 3-4.2 5.5-4.2s4.6 1.4 5.5 4.2"/><circle cx="17" cy="9.5" r="2.4"/><path d="M15.8 14.6c2.3.2 4 1.5 4.7 3.9"/></svg>
       Household
     </button>
