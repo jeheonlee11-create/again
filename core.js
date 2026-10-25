@@ -175,3 +175,25 @@ export function esc(s) {
   return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
+
+/* Recipe links are free text. Only http(s) links are ever rendered as an href, so a pasted
+   "javascript:..." or "data:..." link cannot run script when tapped. Bare "www." / "example.com/x"
+   links get https:// added. Returns "" when the value should not be linked. */
+export function safeUrl(raw) {
+  var s = String(raw == null ? "" : raw).trim();
+  if (!s) return "";
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(s)) {
+    if (!/^[^\s/]+\.[^\s/]+/.test(s)) return "";
+    s = "https://" + s.replace(/^\/+/, "");
+  }
+  try {
+    var u = new URL(s);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.href : "";
+  } catch (e) { return ""; }
+}
+
+/* Photos are stored as JPEG data URLs made by a canvas; anything else is not rendered. */
+export function safeImageSrc(raw) {
+  var s = String(raw == null ? "" : raw);
+  return /^data:image\/(jpeg|png|webp);base64,[a-z0-9+/=]+$/i.test(s) ? s : "";
+}

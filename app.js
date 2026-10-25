@@ -84,7 +84,8 @@ import * as core from "./core.js";
 
   function tile(m, size) {
     var name = m && m.name ? m.name : "?";
-    if (m && m.thumb) return '<span class="tile tile-' + size + '"><img src="' + m.thumb + '" alt=""></span>';
+    var src = m && core.safeImageSrc(m.thumb);
+    if (src) return '<span class="tile tile-' + size + '"><img src="' + esc(src) + '" alt=""></span>';
     return '<span class="tile tile-' + size + '" aria-hidden="true">' + esc(name.trim().charAt(0) || "?") + "</span>";
   }
 
@@ -525,7 +526,7 @@ import * as core from "./core.js";
 
         '<details class="moredetails"><summary>Add details (photo, link, note, time)</summary><div>' +
           '<div class="fgroup"><button class="photobtn" id="photo-pick" type="button">' +
-          (L.thumb ? '<img src="' + L.thumb + '" alt="">Photo added — tap to replace' : "Add a photo (optional)") +
+          (core.safeImageSrc(L.thumb) ? '<img src="' + esc(L.thumb) + '" alt="">Photo added — tap to replace' : "Add a photo (optional)") +
           '</button><input type="file" id="photo-file" accept="image/*" hidden></div>' +
           '<div class="fgroup"><input class="field" id="log-url" inputmode="url" placeholder="Recipe link (optional)" value="' + esc(L.url) + '"></div>' +
           '<div class="fgroup"><input class="field" id="log-note" placeholder="Modification note — e.g. used less sugar" value="' + esc(L.note) + '"></div>' +
@@ -803,7 +804,7 @@ import * as core from "./core.js";
       tile(m, "lg") +
       "<h1>" + esc(m.name) + "</h1>" +
       '<div class="dsub">' +
-        (m.url ? '<a href="' + esc(m.url) + '" target="_blank" rel="noopener">Recipe source</a> · ' : "") +
+        (core.safeUrl(m.url) ? '<a href="' + esc(core.safeUrl(m.url)) + '" target="_blank" rel="noopener noreferrer">Recipe source</a> · ' : "") +
         (m.timeMins ? m.timeMins + " min · " : "") + (m.effort ? m.effort : "effort not set") +
       "</div>" +
 

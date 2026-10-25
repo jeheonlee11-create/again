@@ -121,3 +121,23 @@ test("esc neutralises HTML in user-entered names", function () {
   assert.equal(core.esc("Tom's & Jerry's"), "Tom&#39;s &amp; Jerry&#39;s");
   assert.equal(core.esc(null), "");
 });
+
+test("safeUrl only lets http(s) links through", function () {
+  assert.equal(core.safeUrl("https://cooking.example/recipe?id=1"), "https://cooking.example/recipe?id=1");
+  assert.equal(core.safeUrl("http://example.com"), "http://example.com/");
+  assert.equal(core.safeUrl("www.example.com/soup"), "https://www.example.com/soup");
+  assert.equal(core.safeUrl("example.com"), "https://example.com/");
+  assert.equal(core.safeUrl("javascript:alert(1)"), "");
+  assert.equal(core.safeUrl(" JavaScript:alert(document.cookie)"), "");
+  assert.equal(core.safeUrl("data:text/html,<script>alert(1)</script>"), "");
+  assert.equal(core.safeUrl("vbscript:msgbox"), "");
+  assert.equal(core.safeUrl("grandma's notebook"), "");
+  assert.equal(core.safeUrl(""), "");
+});
+
+test("safeImageSrc only accepts image data URLs", function () {
+  assert.equal(core.safeImageSrc("data:image/jpeg;base64,/9j/4AAQ=="), "data:image/jpeg;base64,/9j/4AAQ==");
+  assert.equal(core.safeImageSrc('x" onerror="alert(1)'), "");
+  assert.equal(core.safeImageSrc("https://tracker.example/pixel.gif"), "");
+  assert.equal(core.safeImageSrc(null), "");
+});
