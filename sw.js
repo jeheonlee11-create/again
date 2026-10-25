@@ -8,8 +8,10 @@
 
    Navigations to the app (with or without ?join=...) get the cached index.html, so invite
    links open offline too. Anything else same-origin (e.g. docs/) goes to the network. */
-var VERSION = "again-v7";
-var SHELL = ["./", "index.html", "app.js", "core.js", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-512.png"];
+var VERSION = "again-v8";
+/* The page is cached under "./" only: some hosts serve it at / and 404 on /index.html,
+   and one missing file would make addAll fail and leave the app without offline support. */
+var SHELL = ["./", "app.js", "core.js", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-512.png"];
 
 self.addEventListener("install", function (e) {
   e.waitUntil(
@@ -45,7 +47,7 @@ self.addEventListener("fetch", function (e) {
 
   if (isAppNavigation(req, url)) {
     e.respondWith(caches.open(VERSION).then(function (c) {
-      return c.match("index.html").then(function (hit) { return hit || fetch(req); });
+      return c.match("./").then(function (hit) { return hit || fetch(req); });
     }));
     return;
   }
