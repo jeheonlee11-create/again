@@ -1,6 +1,6 @@
 /* Again — offline cache, cache-first for same-origin static assets */
-var VERSION = "again-v5";
-var ASSETS = ["./", "index.html", "app.js", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-512.png"];
+var VERSION = "again-v6";
+var ASSETS = ["./", "index.html", "app.js", "core.js", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-512.png"];
 
 self.addEventListener("install", function (e) {
   e.waitUntil(

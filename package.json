@@ -1,0 +1,11 @@
+{
+  "name": "again",
+  "private": true,
+  "description": "Household meal-ranking PWA. No dependencies and no build step; package.json only sets ES module mode for the tests.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test"
+  }
+}

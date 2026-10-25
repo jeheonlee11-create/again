@@ -1,26 +1,14 @@
-/* again — MVP core loop: cook → log → compare → rank → recommend → cook again.
-   Vanilla JS, localStorage persistence, no dependencies. */
-(function () {
-  "use strict";
+/* again — UI layer: rendering, event handling and persistence.
+   Pure logic (ranking, suggestions, storage shape) lives in core.js so it can be tested in Node.
+   Core loop: cook → log → compare → rank → recommend → cook again. */
+import * as core from "./core.js";
 
   var $ = function (id) { return document.getElementById(id); };
   var KEY = "again.v3";
-  var DAY = 864e5, WEEK = 7 * DAY;
+  var DAY = core.DAY;
+  var blankStore = core.blankStore, uid = core.uid, esc = core.esc;
 
   /* ================================================================ STORE */
-
-  function blankStore() {
-    return {
-      household: null,                 // {name, members:[names]} — null → onboarding
-      meals: [],                       // {id,name,url,thumb,timeMins,effort,tags[],createdAt,mods}
-      events: [],                      // {mealId,ts,ate[],reactions{},note,again}
-      comparisons: [],                 // {a,b,result:'a'|'b'|'same'|'skip',ts}
-      saved: [],                       // {id,title,url,from,status:'queued'|'cooked'}
-      order: { yes: [], maybe: [], no: [] },
-      analytics: [],
-      fb: { shown: {}, answers: {} }
-    };
-  }
 
   var S = load();
 
@@ -32,35 +20,12 @@
         if (v && v.order && v.meals) return v;
       }
     } catch (e) {}
-    return migrateV2() || blankStore();
-  }
-
-  /* best-effort migration from the pre-pivot store */
-  function migrateV2() {
     try {
-      var rot = JSON.parse(localStorage.getItem("again.rotation.v2") || "null");
-      if (!Array.isArray(rot) || !rot.length) return null;
-      var s = blankStore();
-      s.household = { name: "Our household", members: ["You"] };
-      rot.forEach(function (d) {
-        var id = uid();
-        s.meals.push({ id: id, name: d.name, url: "", thumb: d.thumb || null,
-          timeMins: null, effort: null, tags: d.tags || [], createdAt: Date.now(), mods: d.mods || "" });
-        var tier = d.tier === "no" ? "no" : (d.tier === "maybe" ? "maybe" : "yes");
-        s.order[tier].push(id);
-        var n = Math.max(1, d.reps || 1);
-        for (var i = 0; i < n; i++) {
-          s.events.push({ mealId: id, ts: (d.lastTs || Date.now()) - i * 9 * DAY,
-            ate: ["You"], reactions: {}, note: "", again: tier });
-        }
-      });
-      return s;
-    } catch (e) { return null; }
+      return core.migrateV2(JSON.parse(localStorage.getItem("again.rotation.v2") || "null"), Date.now()) || blankStore();
+    } catch (e) { return blankStore(); }
   }
 
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
-
-  function uid() { return "m" + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4); }
 
   /* ================================================================ ANALYTICS
      Thin abstraction — swap the sink later without touching call sites. */
@@ -77,87 +42,27 @@
     return S.analytics.filter(function (a) { return a.e === name; }).length;
   }
 
-  /* ================================================================ DERIVED */
+  /* ================================================================ DERIVED
+     Thin bindings of core.js to the live store and clock. */
 
-  function mealById(id) { return S.meals.filter(function (m) { return m.id === id; })[0] || null; }
-  function mealByName(name) {
-    var q = String(name).trim().toLowerCase();
-    return S.meals.filter(function (m) { return m.name.trim().toLowerCase() === q; })[0] || null;
-  }
-  function eventsOf(id) {
-    return S.events.filter(function (e) { return e.mealId === id; })
-      .sort(function (a, b) { return b.ts - a.ts; });
-  }
-  function repsOf(id) { return eventsOf(id).length; }
-  function lastTsOf(id) { var e = eventsOf(id)[0]; return e ? e.ts : null; }
-  function tierOf(id) {
-    if (S.order.yes.indexOf(id) >= 0) return "yes";
-    if (S.order.maybe.indexOf(id) >= 0) return "maybe";
-    if (S.order.no.indexOf(id) >= 0) return "no";
-    return null;
-  }
-
-  function orderedIds() { return S.order.yes.concat(S.order.maybe, S.order.no); }
-  function rankOf(id) { return orderedIds().indexOf(id) + 1; }
-
-  function members() { return (S.household && S.household.members) || ["You"]; }
-
-  function lastEvent(id) { return eventsOf(id)[0] || null; }
-
-  function everyoneOK(id) {
-    var e = lastEvent(id);
-    if (!e) return false;
-    var ms = members();
-    var allAte = ms.every(function (m) { return e.ate.indexOf(m) >= 0; });
-    var noNever = ms.every(function (m) { return e.reactions[m] !== "never"; });
-    return allAte && noNever;
-  }
-
-  function hasNever(id) {
-    var e = lastEvent(id);
-    if (!e) return false;
-    return Object.keys(e.reactions).some(function (k) { return e.reactions[k] === "never"; });
-  }
-
-  function labelOf(id) {
-    var t = tierOf(id);
-    if (t === "no") return { k: "retired", txt: "Retired" };
-    if (t === "yes" && repsOf(id) >= 4 && everyoneOK(id)) return { k: "staple", txt: "Household staple" };
-    var m = mealById(id);
-    if (t === "yes" && m && m.effort === "involved") return { k: "occasion", txt: "Special occasion" };
-    if (t === "maybe" || hasNever(id)) return { k: "mixed", txt: "Mixed response" };
-    if (t === "yes") return { k: "repeat", txt: "Worth repeating" };
-    return { k: "mixed", txt: "Unranked" };
-  }
-
-  function ago(ts) {
-    if (!ts) return "never";
-    var days = Math.round((Date.now() - ts) / DAY);
-    if (days <= 0) return "today";
-    if (days === 1) return "yesterday";
-    if (days < 7) return days + " days ago";
-    if (days < 60) { var w = Math.round(days / 7); return w === 1 ? "last week" : w + " weeks ago"; }
-    var mo = Math.round(days / 30); return mo === 1 ? "last month" : mo + " months ago";
-  }
+  function mealById(id) { return core.mealById(S, id); }
+  function mealByName(name) { return core.mealByName(S, name); }
+  function eventsOf(id) { return core.eventsOf(S, id); }
+  function repsOf(id) { return core.repsOf(S, id); }
+  function lastTsOf(id) { return core.lastTsOf(S, id); }
+  function lastEvent(id) { return core.lastEvent(S, id); }
+  function tierOf(id) { return core.tierOf(S, id); }
+  function orderedIds() { return core.orderedIds(S); }
+  function rankOf(id) { return core.rankOf(S, id); }
+  function members() { return core.members(S); }
+  function everyoneOK(id) { return core.everyoneOK(S, id); }
+  function labelOf(id) { return core.labelOf(S, id); }
+  function ago(ts) { return core.ago(ts, Date.now()); }
+  function streakWeeks() { return core.streakWeeks(S.events, Date.now()); }
+  function whyFor(id) { return core.whyFor(S, id, Date.now()); }
 
   function dateShort(ts) {
     return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  }
-
-  function streakWeeks() {
-    if (!S.events.length) return 0;
-    var now = Date.now(), weeks = {};
-    S.events.forEach(function (e) { weeks[Math.floor((now - e.ts) / WEEK)] = true; });
-    var start = weeks[0] ? 0 : (weeks[1] ? 1 : -1);
-    if (start < 0) return 0;
-    var n = 0, w = start;
-    while (weeks[w]) { n++; w++; }
-    return n;
-  }
-
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
   /* ================================================================ ORDER OPS */
@@ -258,44 +163,9 @@
 
   /* ================================================================ TONIGHT */
 
-  function recReliable() {
-    var pool = S.order.yes.filter(function (id) { return repsOf(id) >= 2; });
-    if (!pool.length) pool = S.order.yes.slice();
-    if (!pool.length) return null;
-    var scored = pool.map(function (id) {
-      var days = lastTsOf(id) ? (Date.now() - lastTsOf(id)) / DAY : 30;
-      return { id: id, s: Math.min(repsOf(id), 10) * 2 + (everyoneOK(id) ? 6 : 0) + Math.min(days, 56) / 7 };
-    }).sort(function (a, b) { return b.s - a.s; });
-    return scored[0].id;
-  }
-
-  function recQuick(excl) {
-    var pool = orderedIds().filter(function (id) {
-      if (id === excl || tierOf(id) === "no") return false;
-      var m = mealById(id);
-      return (m.timeMins && m.timeMins <= 30) || m.effort === "easy";
-    });
-    return pool[0] || null;
-  }
-
-  function recNew() {
-    var q = S.saved.filter(function (s) { return s.status === "queued"; })[0];
-    if (q) return { saved: q };
-    var once = orderedIds().filter(function (id) { return repsOf(id) === 1 && tierOf(id) !== "no"; });
-    if (once.length) return { meal: once[once.length - 1] };
-    return null;
-  }
-
-  function whyFor(id) {
-    var out = [], m = mealById(id), reps = repsOf(id), last = lastTsOf(id);
-    if (everyoneOK(id)) out.push("Everyone liked it last time");
-    if (repsOf(id) >= 4 && labelOf(id).k === "staple") out.push("A household staple");
-    if (reps > 1) out.push("Cooked " + reps + "×");
-    if (m.timeMins) out.push("Takes " + m.timeMins + " min");
-    if (last && Date.now() - last > 3 * WEEK) out.push("Not made in " + ago(last).replace(" ago", ""));
-    else if (last) out.push("Last made " + ago(last));
-    return out.slice(0, 4);
-  }
+  function recReliable() { return core.recReliable(S, Date.now()); }
+  function recQuick(excl) { return core.recQuick(S, excl); }
+  function recNew() { return core.recNew(S); }
 
   function recCard(kind, id, savedItem) {
     if (savedItem) {
@@ -1321,4 +1191,3 @@
       navigator.serviceWorker.register("sw.js").catch(function () {});
     }
   })();
-})();
