@@ -174,8 +174,8 @@ import * as core from "./core.js";
   /* ================================================================ TONIGHT */
 
   function recReliable() { return core.recReliable(S, Date.now()); }
-  function recQuick(excl) { return core.recQuick(S, excl); }
-  function recNew() { return core.recNew(S); }
+  function recQuick(excl) { return core.recQuick(S, excl, Date.now()); }
+  function recNew(excl) { return core.recNew(S, excl); }
 
   function recCard(kind, id, savedItem) {
     if (savedItem) {
@@ -231,7 +231,7 @@ import * as core from "./core.js";
 
     var rel = recReliable();
     var quick = recQuick(rel);
-    var nw = recNew();
+    var nw = recNew([rel, quick]);
 
     track("recommendation_viewed", { reliable: !!rel, quick: !!quick, fresh: !!nw });
 

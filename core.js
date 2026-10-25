@@ -295,31 +295,64 @@ export function applyInsertion(band, ins) {
 
 /* ================================================================ SUGGESTIONS */
 
+/* Meals cooked this recently are left out of suggestions while anything else qualifies,
+   so "what should we cook tonight?" doesn't answer with last night's dinner. */
+export var COOLDOWN_DAYS = 3;
+
+function cooledDown(S, id, now) {
+  var last = lastTsOf(S, id);
+  return !last || now - last >= COOLDOWN_DAYS * DAY;
+}
+
+function preferCooled(S, ids, now) {
+  var rested = ids.filter(function (id) { return cooledDown(S, id, now); });
+  return rested.length ? rested : ids;
+}
+
+/* "Reliable favorite": a yes-band meal, scored by four transparent signals —
+     rank in the yes band  0..6  (your matchup answers; #1 gets 6)
+     times cooked          0..20 (2 per cook, capped at 10 cooks)
+     everyone OK last time 0 or 6
+     time since last made  0..8  (1 per week, capped at 8 weeks)
+   Meals cooked 2+ times are preferred so a one-off doesn't win on rank alone. */
+export function reliableScore(S, id, now) {
+  var band = S.order.yes, i = band.indexOf(id);
+  var rank = i < 0 ? 0 : 6 * (1 - i / band.length);
+  var last = lastTsOf(S, id);
+  var days = last ? (now - last) / DAY : 30;
+  return rank + Math.min(repsOf(S, id), 10) * 2 + (everyoneOK(S, id) ? 6 : 0) + Math.min(days, 56) / 7;
+}
+
 export function recReliable(S, now) {
   var pool = S.order.yes.filter(function (id) { return repsOf(S, id) >= 2; });
   if (!pool.length) pool = S.order.yes.slice();
   if (!pool.length) return null;
-  var scored = pool.map(function (id) {
-    var last = lastTsOf(S, id);
-    var days = last ? (now - last) / DAY : 30;
-    return { id: id, s: Math.min(repsOf(S, id), 10) * 2 + (everyoneOK(S, id) ? 6 : 0) + Math.min(days, 56) / 7 };
-  }).sort(function (a, b) { return b.s - a.s; });
+  pool = preferCooled(S, pool, now);
+  var scored = pool.map(function (id) { return { id: id, s: reliableScore(S, id, now) }; })
+    .sort(function (a, b) { return b.s - a.s; });
   return scored[0].id;
 }
 
-export function recQuick(S, excl) {
+/* "Quick option": the best-ranked meal (yes, then maybe) that takes ≤30 min or is marked easy */
+export function recQuick(S, excl, now) {
   var pool = orderedIds(S).filter(function (id) {
     if (id === excl || tierOf(S, id) === "no") return false;
     var m = mealById(S, id);
-    return (m.timeMins && m.timeMins <= 30) || m.effort === "easy";
+    return !!m && ((m.timeMins && m.timeMins <= 30) || m.effort === "easy");
   });
+  if (now != null) pool = preferCooled(S, pool, now);
   return pool[0] || null;
 }
 
-export function recNew(S) {
+/* "Something new": the most recently saved recipe still queued, else the lowest-ranked meal cooked only once.
+   `excl` are ids already shown in another card. */
+export function recNew(S, excl) {
+  excl = excl || [];
   var q = S.saved.filter(function (s) { return s.status === "queued"; })[0];
   if (q) return { saved: q };
-  var once = orderedIds(S).filter(function (id) { return repsOf(S, id) === 1 && tierOf(S, id) !== "no"; });
+  var once = orderedIds(S).filter(function (id) {
+    return repsOf(S, id) === 1 && tierOf(S, id) !== "no" && excl.indexOf(id) < 0;
+  });
   if (once.length) return { meal: once[once.length - 1] };
   return null;
 }
