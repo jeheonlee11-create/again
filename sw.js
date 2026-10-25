@@ -1,12 +1,22 @@
-/* Again — offline cache, cache-first for same-origin static assets */
-var VERSION = "again-v6";
-var ASSETS = ["./", "index.html", "app.js", "core.js", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-512.png"];
+/* again — offline support.
+
+   The app shell below is precached as one versioned set and served cache-first. Files are
+   never updated one at a time at runtime: app.js and core.js are ES modules that must match,
+   and a half-updated cache (new app.js, old core.js) would leave a blank page. Shipping a
+   change means bumping VERSION; the browser sees sw.js changed, installs the new set in the
+   background, and the next launch uses it.
+
+   Navigations to the app (with or without ?join=...) get the cached index.html, so invite
+   links open offline too. Anything else same-origin (e.g. docs/) goes to the network. */
+var VERSION = "again-v7";
+var SHELL = ["./", "index.html", "app.js", "core.js", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-512.png"];
 
 self.addEventListener("install", function (e) {
   e.waitUntil(
     caches.open(VERSION).then(function (c) {
-      // best-effort precache; don't fail install if an icon is missing
-      return Promise.allSettled(ASSETS.map(function (a) { return c.add(a); }));
+      /* cache: "reload" skips the HTTP cache so the new set really is new; addAll is
+         all-or-nothing, so a failed download keeps the previous version in charge */
+      return c.addAll(SHELL.map(function (u) { return new Request(u, { cache: "reload" }); }));
     }).then(function () { return self.skipWaiting(); })
   );
 });
@@ -14,26 +24,33 @@ self.addEventListener("install", function (e) {
 self.addEventListener("activate", function (e) {
   e.waitUntil(
     caches.keys().then(function (keys) {
-      return Promise.all(keys.filter(function (k) { return k !== VERSION; })
+      return Promise.all(keys.filter(function (k) { return k.indexOf("again-") === 0 && k !== VERSION; })
         .map(function (k) { return caches.delete(k); }));
     }).then(function () { return self.clients.claim(); })
   );
 });
 
+function isAppNavigation(req, url) {
+  if (req.mode !== "navigate") return false;
+  var scope = new URL(self.registration.scope);
+  var p = url.pathname;
+  return p === scope.pathname || p === scope.pathname + "index.html";
+}
+
 self.addEventListener("fetch", function (e) {
-  if (e.request.method !== "GET") return;
-  var url = new URL(e.request.url);
-  if (url.origin !== location.origin) return;
-  e.respondWith(
-    caches.match(e.request).then(function (hit) {
-      var fetched = fetch(e.request).then(function (res) {
-        if (res && res.ok) {
-          var copy = res.clone();
-          caches.open(VERSION).then(function (c) { c.put(e.request, copy); });
-        }
-        return res;
-      }).catch(function () { return hit; });
-      return hit || fetched;
-    })
-  );
+  var req = e.request;
+  if (req.method !== "GET") return;
+  var url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
+  if (isAppNavigation(req, url)) {
+    e.respondWith(caches.open(VERSION).then(function (c) {
+      return c.match("index.html").then(function (hit) { return hit || fetch(req); });
+    }));
+    return;
+  }
+
+  e.respondWith(caches.open(VERSION).then(function (c) {
+    return c.match(req, { ignoreSearch: true }).then(function (hit) { return hit || fetch(req); });
+  }));
 });
