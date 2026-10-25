@@ -1,0 +1,13 @@
+# wrangler.jsonc serves this directory as static assets; publish only the app.
+.git
+.github
+docs
+tests
+node_modules
+package.json
+README.md
+LICENSE
+wrangler.jsonc
+.assetsignore
+.gitignore
+.DS_Store
