@@ -236,6 +236,63 @@ export function streakWeeks(events, now) {
   return n;
 }
 
+/* ================================================================ RANKING: BINARY INSERTION
+   A band is an array of meal ids, best first. A new (or moved) meal is placed by asking
+   "which would you rather make again?" against the middle of the range it could still be in,
+   halving that range each time. Placing into a band of n meals takes at most
+   ceil(log2(n + 1)) answers (e.g. 4 for 10 meals, 7 for 100), versus up to n when you
+   walk down the list one by one.
+
+   The state is a plain object so it can live in UI state between taps:
+     { id, others, lo, hi, steps, done }
+   `others` is the band without the meal; the meal belongs somewhere in others[lo..hi].
+   Until the search finishes, the meal sits at index `hi` (bottom of its possible range),
+   so stopping early ("Skip" or leaving the screen) never ranks it higher than the answers support. */
+
+export function maxComparisons(n) { return n <= 0 ? 0 : Math.ceil(Math.log2(n + 1)); }
+
+export function startInsertion(band, id) {
+  var others = band.filter(function (x) { return x !== id; });
+  return { id: id, others: others, lo: 0, hi: others.length, steps: 0, done: others.length === 0 };
+}
+
+/* the meal to compare against next, or null when placement is finished */
+export function opponent(ins) {
+  return ins.done ? null : ins.others[(ins.lo + ins.hi) >> 1];
+}
+
+/* result is from the placed meal's side: "a" = it wins, "b" = the opponent wins,
+   "same" = about equal (goes directly below the opponent), "skip" = stop asking */
+export function answer(ins, result) {
+  if (ins.done) return ins;
+  var mid = (ins.lo + ins.hi) >> 1;
+  var next = { id: ins.id, others: ins.others, lo: ins.lo, hi: ins.hi, steps: ins.steps + 1, done: false };
+  if (result === "a") next.hi = mid;
+  else if (result === "b") next.lo = mid + 1;
+  else if (result === "same") { next.lo = mid + 1; next.hi = mid + 1; }
+  else { next.steps = ins.steps; next.done = true; return next; }
+  if (next.lo >= next.hi) next.done = true;
+  return next;
+}
+
+/* the band with the meal at its current best-supported position */
+export function placed(ins) {
+  var out = ins.others.slice();
+  out.splice(ins.hi, 0, ins.id);
+  return out;
+}
+
+/* Apply an insertion to the band as it is *now*. If the band changed underneath the
+   insertion (e.g. another tab added a meal), leave the order alone rather than risk
+   dropping or duplicating anything. */
+export function applyInsertion(band, ins) {
+  var others = band.filter(function (x) { return x !== ins.id; });
+  var same = others.length === ins.others.length &&
+    others.every(function (x, i) { return x === ins.others[i]; });
+  if (!same) return band.indexOf(ins.id) >= 0 ? band.slice() : band.concat([ins.id]);
+  return placed(ins);
+}
+
 /* ================================================================ SUGGESTIONS */
 
 export function recReliable(S, now) {

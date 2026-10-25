@@ -125,20 +125,22 @@ import * as core from "./core.js";
     toastTimer = setTimeout(function () { el.classList.remove("on"); }, 2200);
   }
 
-  /* single comparison card. cb(result) with 'a'|'b'|'same'|'skip' */
-  function duelHtml(aMeal, bMeal, aCtx, bCtx) {
-    return '<div class="duelwrap">' +
-      '<button class="duel" data-duel="a">' + tile(aMeal, "lg") +
+  /* One comparison card. `kind` says which flow owns it ("onb" | "refine" | "place"), so a click
+     is always routed to the flow that rendered it. Results: 'a' | 'b' | 'same' | 'skip'. */
+  function duelHtml(kind, aMeal, bMeal, aCtx, bCtx) {
+    var k = ' data-kind="' + kind + '"';
+    return '<div class="duelwrap" role="group" aria-label="Which would you rather make again?">' +
+      '<button class="duel" data-duel="a"' + k + '>' + tile(aMeal, "lg") +
         '<span class="dinfo"><span class="dlabel">' + esc(aCtx || "") + '</span>' +
         '<span class="dname">' + esc(aMeal.name) + "</span></span></button>" +
       '<div class="duel-or">or</div>' +
-      '<button class="duel" data-duel="b">' + tile(bMeal, "lg") +
+      '<button class="duel" data-duel="b"' + k + '>' + tile(bMeal, "lg") +
         '<span class="dinfo"><span class="dlabel">' + esc(bCtx || "") + '</span>' +
         '<span class="dname">' + esc(bMeal.name) + "</span></span></button>" +
       "</div>" +
       '<div class="duel-alts">' +
-        '<button class="btn btn-quiet btn-sm" data-duel="same">About the same</button>' +
-        '<button class="btn btn-quiet btn-sm" data-duel="skip">Skip</button>' +
+        '<button class="btn btn-quiet btn-sm" data-duel="same"' + k + '>About the same</button>' +
+        '<button class="btn btn-quiet btn-sm" data-duel="skip"' + k + '>Skip</button>' +
       "</div>";
   }
 
@@ -148,9 +150,8 @@ import * as core from "./core.js";
     tab: "tonight",
     view: "all",
     fresh: null,
-    onb: null,          // {step, name, members, mealNames[], mealIds[], duelN}
+    onb: null,          // {step, name, members, mealNames[], mealIds[], sorted, ins, maxDuels, duelN}
     log: null,          // see newLog()
-    duelCb: null,       // active duel resolver
     savedDraft: ""
   };
 
@@ -165,7 +166,8 @@ import * as core from "./core.js";
       again: null,
       savedId: prefill && prefill.savedId || null,
       reactions: {},
-      placedId: null, comparePending: false
+      placedId: null, comparePending: false,
+      ins: null, insMax: 0        // binary-insertion state for the placement matchups
     };
   }
 
@@ -257,7 +259,7 @@ import * as core from "./core.js";
 
   function renderOnboarding(el) {
     if (!st.onb) {
-      st.onb = { step: 1, name: "", members: ["You"], mealNames: [], mealIds: [], duelN: 0 };
+      st.onb = { step: 1, name: "", members: ["You"], mealNames: [], mealIds: [], sorted: 1, ins: null, maxDuels: 0, duelN: 0 };
       track("onboarding_started", {});
       var joinName = new URLSearchParams(location.search).get("join");
       if (joinName) { st.onb.name = joinName; st.onb.joined = true; }
@@ -300,12 +302,12 @@ import * as core from "./core.js";
     }
 
     if (o.step === 3) {
-      var pair = onbPair();
+      var opp = core.opponent(o.ins);
       html = '<div class="onb">' +
         '<div class="steps">Step 3 of 3 — first ranking</div>' +
         "<h2>Which would you rather make again?</h2>" +
-        '<p class="lede">Two quick matchups. No stars, no scores to invent.</p>' +
-        duelHtml(mealById(pair[0]), mealById(pair[1]), "", "") +
+        '<p class="lede">Matchup ' + (o.duelN + 1) + " of at most " + o.maxDuels + ". No stars, no scores to invent.</p>" +
+        duelHtml("onb", mealById(o.ins.id), mealById(opp), "", "") +
         "</div>";
     }
 
@@ -331,31 +333,35 @@ import * as core from "./core.js";
     if (f && o.step < 3) f.focus();
   }
 
-  function onbPair() {
-    var o = st.onb;
-    if (o.duelN === 0) return [o.mealIds[0], o.mealIds[1]];
-    return [S.order.yes[0], o.mealIds[2]];
+  /* Onboarding ranks the first meals by inserting them one at a time into the already-ranked
+     prefix of S.order.yes (binary insertion). Every meal stays in S.order.yes throughout,
+     so a reload mid-way never loses one. */
+  function onbNextInsertion() {
+    var o = st.onb, band = S.order.yes;
+    while (o.sorted < band.length) {
+      var next = band[o.sorted];
+      o.ins = core.startInsertion(band.slice(0, o.sorted + 1), next);
+      if (!o.ins.done) return true;
+      o.sorted++;
+    }
+    o.ins = null;
+    return false;
   }
 
   function onbDuel(result) {
-    var o = st.onb, ids = o.mealIds, pair = onbPair();
-    S.comparisons.push({ a: pair[0], b: pair[1], result: result, ts: Date.now() });
+    var o = st.onb;
+    if (!o.ins) return;
+    var opp = core.opponent(o.ins);
+    S.comparisons.push({ a: o.ins.id, b: opp, result: result, ts: Date.now() });
     if (result === "skip") track("comparison_skipped", { where: "onboarding" });
-    else track("comparison_completed", { where: "onboarding", result: result });
+    else { track("comparison_completed", { where: "onboarding", result: result }); o.duelN++; }
 
-    if (o.duelN === 0) {
-      /* order the first two; the rest keep their entry order behind them */
-      var rest = ids.slice(2);
-      S.order.yes = (result === "b" ? [ids[1], ids[0]] : [ids[0], ids[1]]).concat(rest);
-      o.duelN = 1;
-    } else {
-      /* place the third against the current winner */
-      var C = ids[2];
-      var band = S.order.yes.filter(function (id) { return id !== C; });
-      if (result === "b") S.order.yes = [C].concat(band);                       /* C beats the winner */
-      else if (result === "skip") S.order.yes = band.concat([C]);               /* no signal — end */
-      else S.order.yes = [band[0], C].concat(band.slice(1));                    /* lost or tied — middle */
-      o.step = 4;
+    o.ins = core.answer(o.ins, result);
+    if (o.ins.done) {
+      var rest = S.order.yes.slice(o.sorted + 1);
+      S.order.yes = core.placed(o.ins).concat(rest);
+      o.sorted++;
+      if (!onbNextInsertion()) o.step = 4;
     }
     save();
     renderTonight();
@@ -462,26 +468,27 @@ import * as core from "./core.js";
     el.innerHTML = '<div class="flow">' +
       '<div class="step">Refine rankings</div>' +
       "<h2>Which would you rather make again?</h2>" +
-      duelHtml(mealById(refineIds[0]), mealById(refineIds[1]),
+      duelHtml("refine", mealById(refineIds[0]), mealById(refineIds[1]),
         "#" + rankOf(refineIds[0]), "#" + rankOf(refineIds[1])) +
       "</div>";
-    st.duelCb = function (result) {
-      S.comparisons.push({ a: refineIds[0], b: refineIds[1], result: result, ts: Date.now() });
-      if (result === "b") {
-        var band = S.order.yes;
-        var i = band.indexOf(refineIds[0]), j = band.indexOf(refineIds[1]);
-        if (i >= 0 && j >= 0) { band[i] = refineIds[1]; band[j] = refineIds[0]; }
-        track("comparison_completed", { where: "refine", result: "b" });
-      } else if (result === "a" || result === "same") {
-        track("comparison_completed", { where: "refine", result: result });
-      } else {
-        track("comparison_skipped", { where: "refine" });
-      }
-      save();
-      st.duelCb = null;
-      renderRotation();
-      if (result !== "skip") toast("Noted");
-    };
+  }
+
+  /* refine compares two neighbours; if the lower one wins they swap */
+  function refineDuel(result) {
+    if (!refineIds) return;
+    var pair = refineIds;
+    refineIds = null;
+    S.comparisons.push({ a: pair[0], b: pair[1], result: result, ts: Date.now() });
+    if (result === "b") {
+      var band = S.order.yes;
+      var i = band.indexOf(pair[0]), j = band.indexOf(pair[1]);
+      if (i >= 0 && j >= 0) { band[i] = pair[1]; band[j] = pair[0]; }
+    }
+    if (result === "skip") track("comparison_skipped", { where: "refine" });
+    else track("comparison_completed", { where: "refine", result: result });
+    save();
+    renderRotation();
+    if (result !== "skip") toast("Noted");
   }
 
   /* ================================================================ LOG */
@@ -491,6 +498,7 @@ import * as core from "./core.js";
     var el = $("screen-log"), html = "";
 
     if (L.step === "search") {
+      L.ate = members().slice();   /* household may have changed since this log draft was made */
       var q = L.q.trim().toLowerCase();
       var hits = S.meals.filter(function (m) {
         return !q || m.name.toLowerCase().indexOf(q) >= 0;
@@ -572,16 +580,10 @@ import * as core from "./core.js";
             "</span></div>";
         }).join("") + "</div>" +
 
-        (L.comparePending
-          ? '<div class="reactblock"><h3>One quick matchup? <span style="font-weight:400;text-transform:none">(optional)</span></h3>' +
-            (function () {
-              var band = S.order[tierOf(id)];
-              var others = band.filter(function (x) { return x !== id; });
-              if (!others.length) return "";
-              var mid = others[Math.floor(others.length / 2)];
-              L.compareWith = mid;
-              return duelHtml(m2, mealById(mid), "Just cooked", "#" + rankOf(mid));
-            })() + "</div>"
+        (L.comparePending && L.ins && core.opponent(L.ins)
+          ? '<div class="reactblock"><h3>Where does it rank? <span style="font-weight:400;text-transform:none">(optional · ' +
+            "matchup " + (L.ins.steps + 1) + " of at most " + L.insMax + ")</span></h3>" +
+            duelHtml("place", m2, mealById(core.opponent(L.ins)), "Just cooked", "#" + rankOf(core.opponent(L.ins))) + "</div>"
           : "") +
 
         '<button class="btn btn-primary btn-block" id="log-done">Done</button>' +
@@ -614,14 +616,13 @@ import * as core from "./core.js";
     var prevTier = tierOf(m.id);
     var isRepeat = !!L.mealId;
 
-    if (!prevTier) {
-      /* new meal: append to chosen band; offer one placement comparison */
+    if (!prevTier || prevTier !== L.again) {
+      /* new meal, or the again-answer changed: put it at the bottom of that band, then offer
+         binary-insertion matchups to move it up to where it belongs */
       placeInBand(m.id, L.again, null);
-      L.comparePending = S.order[L.again].length > 1;
-    } else if (prevTier !== L.again) {
-      /* answer changed: move bands, keep it simple — append; offer comparison */
-      placeInBand(m.id, L.again, null);
-      L.comparePending = S.order[L.again].length > 1;
+      L.ins = core.startInsertion(S.order[L.again], m.id);
+      L.insMax = core.maxComparisons(L.ins.others.length);
+      L.comparePending = !L.ins.done;
     } else {
       L.comparePending = false;
     }
@@ -655,20 +656,16 @@ import * as core from "./core.js";
 
   function confirmDuel(result) {
     var L = st.log;
-    var id = L.placedId, other = L.compareWith;
-    S.comparisons.push({ a: id, b: other, result: result, ts: Date.now() });
-    if (result === "skip") { track("comparison_skipped", { where: "placement" }); }
-    else {
-      track("comparison_completed", { where: "placement", result: result });
-      var band = S.order[tierOf(id)];
-      band.splice(band.indexOf(id), 1);
-      var oi = band.indexOf(other);
-      if (result === "a") band.splice(oi, 0, id);          /* new wins → above anchor */
-      else if (result === "b") band.splice(oi + 1, 0, id);  /* anchor wins → below */
-      else band.splice(oi + 1, 0, id);                      /* same → adjacent */
-    }
+    if (!L || !L.ins || L.ins.done) return;
+    var id = L.placedId, tier = tierOf(id);
+    if (!tier) { L.comparePending = false; renderLog(); return; }
+    S.comparisons.push({ a: id, b: core.opponent(L.ins), result: result, ts: Date.now() });
+    if (result === "skip") track("comparison_skipped", { where: "placement" });
+    else track("comparison_completed", { where: "placement", result: result });
+    L.ins = core.answer(L.ins, result);
+    S.order[tier] = core.applyInsertion(S.order[tier], L.ins);
+    if (L.ins.done) L.comparePending = false;
     save();
-    L.comparePending = false;
     renderLog();
   }
 
@@ -892,6 +889,7 @@ import * as core from "./core.js";
 
   function setTab(t) {
     st.tab = t;
+    refineIds = null;
     TABS.forEach(function (k) { $("screen-" + k).hidden = k !== t; });
     document.querySelectorAll("[data-tab]").forEach(function (b) {
       if (b.classList.contains("logbtn")) return;
@@ -940,7 +938,11 @@ import * as core from "./core.js";
     }
     if (t.id === "onb-meal-add") {
       var me = $("onb-meal");
-      if (me && me.value.trim()) { st.onb.mealNames.push(me.value.trim()); renderTonight(); }
+      var mv = me ? me.value.trim() : "";
+      if (!mv) return;
+      if (st.onb.mealNames.some(function (x) { return x.toLowerCase() === mv.toLowerCase(); })) { toast("Already on the list"); return; }
+      if (st.onb.mealNames.length >= 12) { toast("Twelve is plenty to start. Add the rest later with Log."); return; }
+      st.onb.mealNames.push(mv); renderTonight();
       return;
     }
     if (t.dataset.onbMealDel !== undefined) {
@@ -948,19 +950,21 @@ import * as core from "./core.js";
       renderTonight(); return;
     }
     if (t.id === "onb-next2") {
-      st.onb.mealIds = st.onb.mealNames.slice(0, 12).map(function (n) {
+      st.onb.mealIds = st.onb.mealNames.map(function (n) {
         var m = { id: uid(), name: n, url: "", thumb: null, timeMins: null, effort: null,
           tags: [], createdAt: Date.now(), mods: "" };
         S.meals.push(m);
         S.events.push({ mealId: m.id, ts: Date.now() - 7 * DAY, ate: members().slice(), reactions: {}, note: "", again: "yes" });
         return m.id;
       });
-      /* everything starts in yes; ordering set by the duels */
-      S.order.yes = st.onb.mealIds.slice(0, 2);
-      st.onb.mealIds.slice(2).forEach(function (id) { if (S.order.yes.indexOf(id) < 0) S.order.yes.push(id); });
+      /* everything starts in yes in entry order; the matchups then sort it */
       S.order.yes = st.onb.mealIds.slice();
       save();
-      st.onb.step = 3; st.onb.duelN = 0;
+      var n = st.onb.mealIds.length;
+      st.onb.maxDuels = 0;
+      for (var k = 1; k < n; k++) st.onb.maxDuels += core.maxComparisons(k);
+      st.onb.sorted = 1; st.onb.duelN = 0;
+      st.onb.step = onbNextInsertion() ? 3 : 4;
       renderTonight();
       return;
     }
@@ -968,10 +972,10 @@ import * as core from "./core.js";
 
     /* --- duels (onboarding + refine + placement share the buttons) --- */
     if (t.dataset.duel) {
-      var res = t.dataset.duel;
-      if (st.onb && st.onb.step === 3) { onbDuel(res); return; }
-      if (st.duelCb) { st.duelCb(res); return; }
-      if (st.log && st.log.step === "confirm" && st.log.comparePending) { confirmDuel(res); return; }
+      var res = t.dataset.duel, kind = t.dataset.kind;
+      if (kind === "onb" && st.onb && st.onb.step === 3) onbDuel(res);
+      else if (kind === "refine") refineDuel(res);
+      else if (kind === "place" && st.log && st.log.step === "confirm") confirmDuel(res);
       return;
     }
 
