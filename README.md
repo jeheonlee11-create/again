@@ -5,6 +5,8 @@ A household meal tracker that ranks the dinners you actually cook by asking one 
 [![CI](https://github.com/jeheonlee11-create/again/actions/workflows/ci.yml/badge.svg)](https://github.com/jeheonlee11-create/again/actions/workflows/ci.yml)
 Live: https://again-app.higgsfield.app (installable PWA, works offline after the first visit)
 
+<img src="docs/images/again-tonight.png" alt="Tonight screen with three suggestions and their reasons" width="280"> <img src="docs/images/again-rotation.png" alt="Rotation screen ranking seven meals" width="280">
+
 ## Why
 
 Most households cycle through the same 10 to 20 dinners, yet "what should we make tonight?" still gets argued over every evening. Recipe apps track what you might cook. This tracks what you did cook, who ate it and whether they would eat it again, and turns that into a ranked list and a short, explained suggestion.
