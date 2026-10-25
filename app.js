@@ -655,7 +655,7 @@ import * as core from "./core.js";
     var L = st.log;
     if (!L || !L.placedId) return;
     var evs = eventsOf(L.placedId);
-    if (evs[0]) { evs[0].reactions = L.reactions; }
+    if (evs[0]) { evs[0].reactions = Object.assign({}, L.reactions); }
     save();
   }
 
@@ -942,7 +942,10 @@ import * as core from "./core.js";
     if (t.id === "onb-demo") { loadDemo(); return; }
     if (t.id === "onb-member-add") {
       var mi = $("onb-member");
-      if (mi && mi.value.trim()) { st.onb.members.push(mi.value.trim()); renderTonight(); }
+      var mn = mi ? mi.value.trim() : "";
+      if (!mn) return;
+      if (hasName(st.onb.members, mn)) { toast(mn + " is already in the household"); return; }
+      st.onb.members.push(mn); renderTonight();
       return;
     }
     if (t.dataset.onbMember !== undefined) {
@@ -1067,7 +1070,8 @@ import * as core from "./core.js";
     if (t.id === "log-save") { syncLogFields(); if (st.log.again) saveLogEvent(); return; }
     if (t.id === "log-cancel") { st.log = newLog(); renderLog(); return; }
     if (t.dataset.react) {
-      var rp = t.dataset.react.split(":");
+      var rv = t.dataset.react, cut = rv.lastIndexOf(":");     /* member names may contain ":" */
+      var rp = [rv.slice(0, cut), rv.slice(cut + 1)];
       st.log.reactions[rp[0]] = st.log.reactions[rp[0]] === rp[1] ? undefined : rp[1];
       if (!st.log.reactions[rp[0]]) delete st.log.reactions[rp[0]];
       applyConfirmReactions();
@@ -1103,10 +1107,11 @@ import * as core from "./core.js";
     /* --- household --- */
     if (t.id === "hh-member-add") {
       var he = $("hh-member");
-      if (he && he.value.trim()) {
-        S.household.members.push(he.value.trim());
-        save(); renderHousehold();
-      }
+      var hn = he ? he.value.trim() : "";
+      if (!hn) return;
+      if (hasName(S.household.members, hn)) { toast(hn + " is already in the household"); return; }
+      S.household.members.push(hn);
+      save(); renderHousehold();
       return;
     }
     if (t.dataset.delmember !== undefined) {
@@ -1164,6 +1169,10 @@ import * as core from "./core.js";
       return;
     }
   });
+
+  function hasName(list, name) {
+    return list.some(function (x) { return x.toLowerCase() === name.toLowerCase(); });
+  }
 
   function keepDetailsOpen() {
     var det = document.querySelector("details.moredetails");
