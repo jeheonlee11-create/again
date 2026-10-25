@@ -4,28 +4,35 @@
 import * as core from "./core.js";
 
   var $ = function (id) { return document.getElementById(id); };
-  var KEY = "again.v3";
+  var KEY = core.STORE_KEY;
   var DAY = core.DAY;
   var blankStore = core.blankStore, uid = core.uid, esc = core.esc;
 
   /* ================================================================ STORE */
 
-  var S = load();
+  /* localStorage can be missing or throw on access (blocked site data, some private modes);
+     fall back to an in-memory store so the app still works for the session. */
+  var store = (function () {
+    try { var ls = window.localStorage; ls.getItem(KEY); return ls; }
+    catch (e) {
+      var mem = {};
+      return { getItem: function (k) { return k in mem ? mem[k] : null; },
+        setItem: function (k, v) { mem[k] = String(v); }, removeItem: function (k) { delete mem[k]; } };
+    }
+  })();
+  var loaded = core.readStore(store, Date.now());
+  var S = loaded.store;
+  /* if an unreadable save couldn't be backed up, never overwrite it */
+  var savesBlocked = loaded.notice === "unreadable" && !loaded.backupKey;
+  var saveFailed = false;
 
-  function load() {
-    try {
-      var raw = localStorage.getItem(KEY);
-      if (raw) {
-        var v = JSON.parse(raw);
-        if (v && v.order && v.meals) return v;
-      }
-    } catch (e) {}
-    try {
-      return core.migrateV2(JSON.parse(localStorage.getItem("again.rotation.v2") || "null"), Date.now()) || blankStore();
-    } catch (e) { return blankStore(); }
+  function save() {
+    if (savesBlocked) return false;
+    var ok = core.writeStore(store, S);
+    if (!ok && !saveFailed) toast("Couldn't save — this browser's storage is full. Export your data from Household.");
+    saveFailed = !ok;
+    return ok;
   }
-
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 
   /* ================================================================ ANALYTICS
      Thin abstraction — swap the sink later without touching call sites. */
@@ -748,8 +755,40 @@ import * as core from "./core.js";
 
       '<div style="text-align:center;padding:24px 0">' +
         '<button class="btn btn-quiet btn-sm" id="share-list">Share your ranked list</button> ' +
+        '<button class="btn btn-quiet btn-sm" id="export-data">Export data</button> ' +
+        '<button class="btn btn-quiet btn-sm" id="import-data">Import</button> ' +
+        '<input type="file" id="import-file" accept="application/json,.json" hidden>' +
         '<button class="btn btn-quiet btn-sm" id="reset-data">Start over</button></div>' +
       "</div>";
+  }
+
+  function exportData() {
+    var blob = new Blob([core.exportStore(S, Date.now())], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "again-export-" + new Date().toISOString().slice(0, 10) + ".json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    track("data_exported", {});
+  }
+
+  function importData(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var next;
+      try { next = core.importStore(String(reader.result)); }
+      catch (err) { toast(err.message); return; }
+      if (!window.confirm("Replace everything on this device with " + next.meals.length + " meals from this file?")) return;
+      next.analytics = S.analytics;
+      S = next;
+      save();
+      st.onb = null; st.log = newLog(); st.fresh = null;
+      setTab("household");
+      toast("Imported " + S.meals.length + " meals");
+    };
+    reader.readAsText(file);
   }
 
   function inviteLink() {
@@ -1062,8 +1101,12 @@ import * as core from "./core.js";
       toast(ok2 ? (navigator.share ? "Share sheet opened" : "List copied to clipboard") : "Could not share");
       return;
     }
+    if (t.id === "export-data") { exportData(); return; }
+    if (t.id === "import-data") { $("import-file").click(); return; }
     if (t.id === "reset-data") {
-      localStorage.removeItem(KEY);
+      if (!window.confirm("Delete every meal, cook and ranking on this device? Export first if you want a copy.")) return;
+      store.removeItem(KEY);
+      savesBlocked = false;
       S = blankStore();
       st.onb = null; st.log = newLog(); st.fresh = null;
       setTab("tonight");
@@ -1125,6 +1168,7 @@ import * as core from "./core.js";
   });
 
   document.addEventListener("change", function (e) {
+    if (e.target.id === "import-file" && e.target.files && e.target.files[0]) { importData(e.target.files[0]); return; }
     if (e.target.id === "photo-file" && e.target.files && e.target.files[0]) {
       syncLogFields();
       fileToThumb(e.target.files[0], function (url) {
@@ -1157,6 +1201,23 @@ import * as core from "./core.js";
     if (id === "saved-draft") { var b4 = $("saved-add"); if (b4) b4.click(); }
   });
 
+  /* Another tab saved: adopt its copy so this tab's next save doesn't overwrite it. */
+  window.addEventListener("storage", function (e) {
+    if (e.key !== KEY || !e.newValue) return;
+    var next = null;
+    try { next = core.normalizeStore(JSON.parse(e.newValue)); } catch (err) {}
+    if (!next) return;
+    S = next;
+    if (st.log && st.log.mealId && !mealById(st.log.mealId)) st.log = newLog();
+    if (detailId && !mealById(detailId)) closeDetail();
+    if (st.tab === "tonight") renderTonight();
+    if (st.tab === "rotation") renderRotation();
+    if (st.tab === "log") renderLog();
+    if (st.tab === "saved") renderSaved();
+    if (st.tab === "household") renderHousehold();
+    renderBar();
+  });
+
   /* ================================================================ BOOT */
 
   (function boot() {
@@ -1169,14 +1230,19 @@ import * as core from "./core.js";
     st.log = newLog();
     renderBar();
     renderTonight();
+    if (loaded.notice === "unreadable") {
+      toast(loaded.backupKey
+        ? "Saved data couldn't be read. A copy was kept as " + loaded.backupKey + "."
+        : "Saved data couldn't be read, so this session won't save over it.");
+    }
 
 
   /* ---- anonymous visit beacon: path, referrer host, opaque random id. No IP/UA stored. ---- */
   (function () {
     if (location.protocol !== "https:") return;
     try {
-      var vid = localStorage.getItem("again.vid");
-      if (!vid) { vid = crypto.randomUUID(); localStorage.setItem("again.vid", vid); }
+      var vid = store.getItem("again.vid");
+      if (!vid) { vid = crypto.randomUUID(); store.setItem("again.vid", vid); }
       var ref = "";
       try { ref = document.referrer ? new URL(document.referrer).hostname : ""; } catch (e) {}
       fetch("/api/hit", {
